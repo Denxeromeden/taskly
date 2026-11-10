@@ -1,0 +1,89 @@
+foundation_contract_version: 2
+region: eu-central-1
+account_id: <terraform-output>
+cluster:
+  name: mlflowops-demo
+  kubernetes_version: "1.35"
+  endpoint_access: public_and_private
+nodepools:
+  base: {type: managed_node_group, capacity: on-demand, taints: [], label: "workload=base"}
+  general-ondemand: {type: karpenter, capacity: on-demand, taints: [], label: "workload=general"}
+  training-spot:
+    type: karpenter
+    capacity: spot
+    taints: ["workload=training:NoSchedule"]
+    label: "workload=training"
+    pod_requirements: {nodeSelector: "workload=training", toleration: "workload=training:NoSchedule"}
+namespaces:
+  platform: [argocd, external-secrets, monitoring]
+  workloads: {mlflow: restricted, ml-jobs: restricted, staging: restricted, production: restricted}
+storage:
+  artifacts_bucket: mlflowops-demo-<account_id>-mlflow-artifacts
+  audit_bucket: mlflowops-demo-<account_id>-audit-logs
+  storage_class_default: gp3
+  mlflow_mode: proxied_artifacts
+  allowed_prefixes: [mlflow/, drift-reports/]
+registry:
+  ecr:
+    serving: <account_id>.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/serving
+    ml_jobs: <account_id>.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/ml-jobs
+    mlflow: <account_id>.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/mlflow
+  tag_policy: immutable_git_sha
+database:
+  host: <terraform-output>
+  port: 5432
+  databases:
+    mlflow: {user: mlflow_app, secret: mlflowops/rds/mlflow}
+    tasks: {user: tasks_app, secret: mlflowops/rds/tasks}
+  ssl: required
+secrets_store:
+  cluster_secret_store: aws-secretsmanager
+  secret_name_prefix: mlflowops/
+  reloader_annotation: 'reloader.stakater.com/auto: "true"'
+service_accounts_with_aws_identity:
+  mlflow: {namespace: mlflow, name: mlflow}
+  drift: {namespace: ml-jobs, name: drift}
+  external-secrets: {namespace: external-secrets, name: external-secrets}
+service_accounts_without_aws_identity: [serving, training, seed, add-data, db-bootstrap]
+ci:
+  github_oidc_role_arn: <terraform-output>
+  kubernetes_group: "mlflowops:deployers"
+  allowed_actions:
+    ml-jobs: [jobs, pods, pods/log]
+    staging: [deployments:patch, pods]
+    production: [deployments:patch, pods]
+gateway_api:
+  api_version: gateway.networking.k8s.io/v1
+  standard_crds_version: v1.6.0
+  controller: aws-load-balancer-controller
+  gateway_class:
+    name: aws-alb
+    controller_name: gateway.k8s.aws/alb
+  serving:
+    namespace: production
+    gateway_name: serving-public
+    route_kind: HTTPRoute
+    route_name: serving-public
+    route_match: {method: POST, path: {type: Exact, value: /predict}}
+    backend_service: <serving-service>
+    backend_service_port: 8000
+    public_endpoint_for: serving_predict_only
+    load_balancer_configuration:
+      api_version: gateway.k8s.aws/v1
+      name: serving-public-lb
+      scheme: internet-facing
+      source_ranges: ["0.0.0.0/0"]
+      listener_configurations:
+        - protocol_port: HTTPS:443
+          default_certificate: <acm_certificate_arn_or_imported_self_signed>
+    listener: {name: https, protocol: HTTPS, port: 443}
+    # Gateway.spec.infrastructure.parametersRef attaches this AWS-specific LoadBalancerConfiguration.
+gitops:
+  argocd_namespace: argocd
+  root_path: deploy/argocd
+  projects: [platform, serving]
+workload_security_contract:
+  run_as_non_root: true
+  read_only_root_fs: preferred
+  drop_capabilities: ALL
+  seccomp: RuntimeDefault

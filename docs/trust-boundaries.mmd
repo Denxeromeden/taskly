@@ -1,0 +1,14 @@
+flowchart LR
+  GH[GitHub Actions OIDC] -->|ECR push + DescribeCluster| GHA[IAM CI role]
+  GHA -->|Kubernetes group mlflowops:deployers| RBAC[Namespace Roles]
+  K8S[EKS workloads] -->|Pod Identity| ESO[External Secrets role]
+  ESO -->|Get only mlflowops/* + RDS master| SM[Secrets Manager]
+  MF[MLflow service account] -->|Pod Identity, mlflow/ prefix only| S3[(Artifacts S3)]
+  DR[Drift service account] -->|Pod Identity, drift-reports/ prefix| S3
+  ROUTE[Serving HTTPRoute] --> GW[GatewayClass aws-alb / Gateway]
+  GW -->|Reconciled by| ALB[AWS Load Balancer Controller]
+  ALB -->|Pod Identity| ELB[Public ALB / Target Groups]
+  EKS[EKS nodes] -->|TLS 5432| RDS[(Private RDS PostgreSQL)]
+  CT[CloudTrail] -->|KMS + S3| AUDIT[(Audit S3)]
+  GD[GuardDuty] --> CT
+  ARGO[Argo CD] -->|GitOps sync| APP[Workload namespaces]
