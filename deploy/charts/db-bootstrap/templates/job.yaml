@@ -49,17 +49,17 @@ spec:
               SQL
           env:
             - name: MASTER_HOST
-              valueFrom: { secretKeyRef: { name: rds-master, key: host } }
+              valueFrom: { secretKeyRef: { name: {{ .Values.tasksSecretName | quote }}, key: host } }
             - name: MASTER_PORT
-              valueFrom: { secretKeyRef: { name: rds-master, key: port } }
+              valueFrom: { secretKeyRef: { name: {{ .Values.tasksSecretName | quote }}, key: port } }
             - name: MASTER_USERNAME
-              valueFrom: { secretKeyRef: { name: rds-master, key: username } }
+              valueFrom: { secretKeyRef: { name: {{ .Values.masterSecretName | quote }}, key: username } }
             - name: MASTER_PASSWORD
-              valueFrom: { secretKeyRef: { name: rds-master, key: password } }
+              valueFrom: { secretKeyRef: { name: {{ .Values.masterSecretName | quote }}, key: password } }
             - name: MLFLOW_PASSWORD
-              valueFrom: { secretKeyRef: { name: mlflow-db-credentials, key: password } }
+              valueFrom: { secretKeyRef: { name: {{ .Values.mlflowSecretName | quote }}, key: password } }
             - name: TASKS_PASSWORD
-              valueFrom: { secretKeyRef: { name: tasks-db-credentials, key: password } }
+              valueFrom: { secretKeyRef: { name: {{ .Values.tasksSecretName | quote }}, key: password } }
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { cpu: 500m, memory: 256Mi }

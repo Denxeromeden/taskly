@@ -1,4 +1,6 @@
 image: postgres:16-alpine
 masterSecretName: rds-master
-mlflowSecretName: mlflow-db-credentials
+mlflowSecretName: db-bootstrap-mlflow-credentials
 tasksSecretName: tasks-db-credentials
+mlflowRemoteSecretName: mlflowops/rds/mlflow
+secretStoreName: aws-secretsmanager
