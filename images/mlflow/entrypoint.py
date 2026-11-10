@@ -13,6 +13,7 @@ DEFAULT_REGION = "eu-central-1"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = "5000"
 DEFAULT_ARTIFACTS_PREFIX = "mlflow"
+DEFAULT_WORKERS = "2"
 SECRET_FIELDS = ("engine", "host", "port", "dbname", "username", "password")
 
 
@@ -88,6 +89,16 @@ def build_artifacts_destination(bucket, prefix):
     return f"s3://{bucket}/{prefix}/"
 
 
+def parse_worker_count(value):
+    try:
+        workers = int(value)
+    except ValueError:
+        raise ConfigError(f"worker count is not an integer: {value}") from None
+    if workers < 1:
+        raise ConfigError(f"worker count must be at least 1: {value}")
+    return workers
+
+
 def main():
     secret_dir = pathlib.Path(os.environ.get("MLFLOW_DB_SECRET_DIR") or DEFAULT_SECRET_DIR)
     bucket = (os.environ.get("MLFLOW_ARTIFACTS_BUCKET") or "").strip()
@@ -95,6 +106,7 @@ def main():
     region = (os.environ.get("AWS_REGION") or "").strip() or DEFAULT_REGION
     host = os.environ.get("MLFLOW_HOST") or DEFAULT_HOST
     port = os.environ.get("MLFLOW_PORT") or DEFAULT_PORT
+    workers = (os.environ.get("MLFLOW_SERVER_WORKERS") or "").strip() or DEFAULT_WORKERS
 
     try:
         if not bucket:
@@ -104,6 +116,7 @@ def main():
             raise ConfigError(f"unsupported database engine: {values['engine']}")
         backend_uri = build_backend_uri(values)
         artifacts_destination = build_artifacts_destination(bucket, prefix)
+        worker_count = parse_worker_count(workers)
         pgpass_path = write_pgpass(values)
     except ConfigError as exc:
         print(f"mlflow entrypoint: {exc}", file=sys.stderr, flush=True)
@@ -118,7 +131,7 @@ def main():
     print(
         "mlflow entrypoint: starting server "
         f"host={host} port={port} database={values['dbname']} user={values['username']} "
-        f"region={region} artifacts={artifacts_destination}",
+        f"region={region} workers={worker_count} artifacts={artifacts_destination}",
         file=sys.stderr,
         flush=True,
     )
@@ -132,6 +145,8 @@ def main():
             host,
             "--port",
             port,
+            "--workers",
+            str(worker_count),
             "--backend-store-uri",
             backend_uri,
             "--artifacts-destination",

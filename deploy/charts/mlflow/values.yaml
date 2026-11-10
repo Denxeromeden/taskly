@@ -1,0 +1,56 @@
+image:
+  repository: mlflowops/mlflow
+  # Leave empty to use appVersion; deployments must override this with an
+  # immutable Git-SHA tag.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+serviceAccount:
+  # Matches the existing EKS Pod Identity association; the chart does not create an AWS role.
+  name: mlflow
+
+dbSecretName: mlflow-db-credentials
+dbSecretMountPath: /var/run/mlflow-db
+
+artifacts:
+  bucket: ""
+  prefix: mlflow
+
+region: eu-central-1
+
+server:
+  port: 5000
+  # Every gunicorn worker is a full MLflow process, measured at ~175MiB RSS each.
+  # Two workers keep the pod near 700MiB; four (the MLflow default) reached ~1.1GiB.
+  workers: 2
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 768Mi
+  limits:
+    cpu: "1"
+    memory: 1536Mi
+
+nodeSelector:
+  workload: base
+
+probes:
+  readiness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 60
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+networkPolicy:
+  allowedNamespaces:
+    - ml-jobs
+    - staging
+    - production

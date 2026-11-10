@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Recreate keeps a single gunicorn process group in memory during a rollout;
+  # a surge would briefly double the pod footprint on the node.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mlflow
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mlflow
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        reloader.stakater.com/auto: "true"
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name | quote }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      containers:
+        - name: mlflow
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+              protocol: TCP
+          env:
+            - name: MLFLOW_DB_SECRET_DIR
+              value: {{ .Values.dbSecretMountPath | quote }}
+            - name: MLFLOW_ARTIFACTS_BUCKET
+              value: {{ .Values.artifacts.bucket | quote }}
+            - name: MLFLOW_ARTIFACTS_PREFIX
+              value: {{ .Values.artifacts.prefix | quote }}
+            - name: MLFLOW_SERVER_WORKERS
+              value: {{ .Values.server.workers | quote }}
+            - name: MLFLOW_PORT
+              value: {{ .Values.server.port | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.region | quote }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: db-credentials
+              mountPath: {{ .Values.dbSecretMountPath | quote }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: db-credentials
+          secret:
+            secretName: {{ .Values.dbSecretName | quote }}
+            defaultMode: 0444
+        - name: tmp
+          emptyDir: {}
