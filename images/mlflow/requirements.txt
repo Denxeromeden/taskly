@@ -1,0 +1,7 @@
+# Tracking server only: training and serving dependencies are not installed here.
+mlflow==2.22.5
+# sqlalchemy 2.1 removed sqlalchemy.pool.FallbackAsyncAdaptedQueuePool, which
+# mlflow 2.22.5 imports from mlflow.store.db.utils at startup.
+sqlalchemy==2.0.57
+psycopg2-binary==2.9.13
+boto3==1.43.127
