@@ -1,0 +1,4 @@
+image: postgres:16-alpine
+masterSecretName: rds-master
+mlflowSecretName: mlflow-db-credentials
+tasksSecretName: tasks-db-credentials

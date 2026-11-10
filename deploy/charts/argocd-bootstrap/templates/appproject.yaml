@@ -1,0 +1,51 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: MLFlowOps platform-managed workloads
+  sourceRepos:
+    - {{ .Values.repoURL | quote }}
+  destinations:
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+    - namespace: ml-jobs
+      server: https://kubernetes.default.svc
+    - namespace: mlflow
+      server: https://kubernetes.default.svc
+    - namespace: staging
+      server: https://kubernetes.default.svc
+    - namespace: production
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: serving
+  namespace: argocd
+spec:
+  description: Serving application deployments
+  sourceRepos:
+    - {{ .Values.repoURL | quote }}
+  destinations:
+    - namespace: staging
+      server: https://kubernetes.default.svc
+    - namespace: production
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: "apps"
+      kind: Deployment
+    - group: ""
+      kind: Service
+    - group: "networking.k8s.io"
+      kind: NetworkPolicy

@@ -1,0 +1,14 @@
+{{- range $ns := list "argocd" "monitoring" "mlflow" "ml-jobs" "staging" "production" }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    {{- if has $ns (list "mlflow" "ml-jobs" "staging" "production") }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    {{- end }}
+---
+{{- end }}

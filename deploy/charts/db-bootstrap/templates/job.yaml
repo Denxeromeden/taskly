@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-bootstrap
+  namespace: ml-jobs
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: db-bootstrap
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: {{ .Values.image | quote }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until [ -n "${MASTER_HOST:-}" ] && [ -n "${MASTER_PASSWORD:-}" ]; do sleep 3; done
+              export PGPASSWORD="$MASTER_PASSWORD"
+              psql "host=$MASTER_HOST port=$MASTER_PORT user=$MASTER_USERNAME dbname=postgres sslmode=require" \
+                -v ON_ERROR_STOP=1 <<'SQL'
+              \getenv mlflow_password MLFLOW_PASSWORD
+              \getenv tasks_password TASKS_PASSWORD
+              SELECT format('CREATE ROLE mlflow_app LOGIN PASSWORD %L', :'mlflow_password')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mlflow_app') \gexec
+              SELECT format('ALTER ROLE mlflow_app LOGIN PASSWORD %L', :'mlflow_password') \gexec
+              SELECT format('CREATE ROLE tasks_app LOGIN PASSWORD %L', :'tasks_password')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tasks_app') \gexec
+              SELECT format('ALTER ROLE tasks_app LOGIN PASSWORD %L', :'tasks_password') \gexec
+              SELECT 'CREATE DATABASE mlflow OWNER mlflow_app'
+              WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'mlflow') \gexec
+              SELECT 'CREATE DATABASE tasks OWNER tasks_app'
+              WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'tasks') \gexec
+              REVOKE CONNECT ON DATABASE mlflow FROM PUBLIC;
+              GRANT CONNECT ON DATABASE mlflow TO mlflow_app;
+              REVOKE CONNECT ON DATABASE tasks FROM PUBLIC;
+              GRANT CONNECT ON DATABASE tasks TO tasks_app;
+              SQL
+          env:
+            - name: MASTER_HOST
+              valueFrom: { secretKeyRef: { name: rds-master, key: host } }
+            - name: MASTER_PORT
+              valueFrom: { secretKeyRef: { name: rds-master, key: port } }
+            - name: MASTER_USERNAME
+              valueFrom: { secretKeyRef: { name: rds-master, key: username } }
+            - name: MASTER_PASSWORD
+              valueFrom: { secretKeyRef: { name: rds-master, key: password } }
+            - name: MLFLOW_PASSWORD
+              valueFrom: { secretKeyRef: { name: mlflow-db-credentials, key: password } }
+            - name: TASKS_PASSWORD
+              valueFrom: { secretKeyRef: { name: tasks-db-credentials, key: password } }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

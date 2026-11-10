@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: db-bootstrap
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/Denxeromeden/taskly
+    targetRevision: main
+    path: deploy/charts/db-bootstrap
+    helm:
+      releaseName: db-bootstrap
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ml-jobs
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

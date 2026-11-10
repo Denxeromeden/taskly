@@ -1,0 +1,5 @@
+region: eu-central-1
+artifactsBucket: ""
+rdsMasterSecretArn: ""
+rdsMlflowSecretName: mlflowops/rds/mlflow
+rdsTasksSecretName: mlflowops/rds/tasks

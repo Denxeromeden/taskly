@@ -1,0 +1,4 @@
+clusterName: mlflowops-demo
+nodeRoleName: mlflowops-demo-karpenter-node
+generalCpuLimit: "16"
+trainingCpuLimit: "8"
