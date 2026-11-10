@@ -2,8 +2,8 @@ data "aws_partition" "current" {}
 data "aws_caller_identity" "current" {}
 
 locals {
-  cluster_arn = var.cluster_arn
-  github_subject_prefix ="repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
+  cluster_arn           = var.cluster_arn
+  github_subject_prefix = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
   repo_subjects = [
     "repo:${local.github_subject_prefix}:ref:refs/heads/main",
     "repo:${local.github_subject_prefix}:environment:staging",
@@ -16,7 +16,7 @@ resource "aws_iam_openid_connect_provider" "github" {
   count          = var.manage_oidc_provider ? 1 : 0
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
-  tags = var.tags
+  tags           = var.tags
 }
 
 data "aws_iam_openid_connect_provider" "github" {
@@ -174,8 +174,8 @@ resource "aws_iam_role_policy" "drift" {
 # The upstream AWS Load Balancer Controller policy contains wildcard resources for EC2/ELB create and describe APIs.
 # Resource-level scoping is not supported by those APIs; request/resource tag conditions constrain mutations.
 resource "aws_iam_role_policy" "lb_controller" {
-  name = "${var.name}-aws-load-balancer-controller"
-  role = aws_iam_role.lb_controller.id
+  name   = "${var.name}-aws-load-balancer-controller"
+  role   = aws_iam_role.lb_controller.id
   policy = file("${path.module}/lb-controller-policy.json")
 }
 

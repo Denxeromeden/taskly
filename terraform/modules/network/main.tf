@@ -1,9 +1,9 @@
 data "aws_availability_zones" "available" { state = "available" }
 
 locals {
-  azs = slice(data.aws_availability_zones.available.names, 0, 2)
-  public_cidrs  = ["10.20.0.0/24", "10.20.1.0/24"]
-  private_cidrs = ["10.20.16.0/20", "10.20.32.0/20"]
+  azs            = slice(data.aws_availability_zones.available.names, 0, 2)
+  public_cidrs   = ["10.20.0.0/24", "10.20.1.0/24"]
+  private_cidrs  = ["10.20.16.0/20", "10.20.32.0/20"]
   database_cidrs = ["10.20.64.0/24", "10.20.65.0/24"]
 }
 
@@ -33,7 +33,7 @@ resource "aws_subnet" "public" {
   cidr_block              = local.public_cidrs[count.index]
   map_public_ip_on_launch = true
   tags = merge(var.tags, {
-    Name = "${var.name}-public-${count.index + 1}"
+    Name                     = "${var.name}-public-${count.index + 1}"
     "kubernetes.io/role/elb" = "1"
   })
 }
@@ -44,9 +44,9 @@ resource "aws_subnet" "private" {
   availability_zone = local.azs[count.index]
   cidr_block        = local.private_cidrs[count.index]
   tags = merge(var.tags, {
-    Name = "${var.name}-private-${count.index + 1}"
+    Name                              = "${var.name}-private-${count.index + 1}"
     "kubernetes.io/role/internal-elb" = "1"
-    "karpenter.sh/discovery" = var.name
+    "karpenter.sh/discovery"          = var.name
   })
 }
 
@@ -55,7 +55,7 @@ resource "aws_subnet" "database" {
   vpc_id            = aws_vpc.this.id
   availability_zone = local.azs[count.index]
   cidr_block        = local.database_cidrs[count.index]
-  tags = merge(var.tags, { Name = "${var.name}-database-${count.index + 1}" })
+  tags              = merge(var.tags, { Name = "${var.name}-database-${count.index + 1}" })
 }
 
 resource "aws_route_table" "public" {
@@ -89,7 +89,7 @@ resource "aws_route_table" "private" {
   count  = 2
   vpc_id = aws_vpc.this.id
   route {
-    cidr_block = "0.0.0.0/0"
+    cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.this.id
   }
   tags = merge(var.tags, { Name = "${var.name}-private-${count.index + 1}" })

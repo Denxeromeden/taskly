@@ -27,7 +27,7 @@ resource "aws_s3_bucket_ownership_controls" "buckets" {
   rule { object_ownership = "BucketOwnerEnforced" }
 }
 resource "aws_s3_bucket_public_access_block" "buckets" {
-  for_each = { artifacts = aws_s3_bucket.artifacts, audit = aws_s3_bucket.audit }
+  for_each                = { artifacts = aws_s3_bucket.artifacts, audit = aws_s3_bucket.audit }
   bucket                  = each.value.id
   block_public_acls       = true
   block_public_policy     = true
@@ -119,7 +119,7 @@ resource "aws_s3_bucket_policy" "audit" {
         Resource  = "${aws_s3_bucket.audit.arn}/cloudtrail/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
         Condition = {
           StringEquals = {
-            "s3:x-amz-acl" = "bucket-owner-full-control"
+            "s3:x-amz-acl"  = "bucket-owner-full-control"
             "aws:SourceArn" = "arn:${data.aws_partition.current.partition}:cloudtrail:${var.region}:${data.aws_caller_identity.current.account_id}:trail/${var.name}-trail"
           }
         }
@@ -136,7 +136,7 @@ resource "aws_ecr_repository" "this" {
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration {
     encryption_type = "KMS"
-    kms_key          = var.data_kms_key_arn
+    kms_key         = var.data_kms_key_arn
   }
   tags = merge(var.tags, { Name = "mlflowops/${each.key}" })
 }
@@ -147,8 +147,8 @@ resource "aws_ecr_lifecycle_policy" "this" {
     rules = [{
       rulePriority = 1
       description  = "Keep the most recent 20 immutable image tags"
-      selection = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 20 }
-      action    = { type = "expire" }
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 20 }
+      action       = { type = "expire" }
     }]
   })
 }
@@ -157,7 +157,7 @@ resource "aws_security_group" "rotation_lambda" {
   name        = "${var.name}-rotation-lambda"
   description = "RDS credential rotation Lambda network access"
   vpc_id      = var.vpc_id
-  tags = var.tags
+  tags        = var.tags
 }
 resource "aws_vpc_security_group_egress_rule" "rotation_to_rds" {
   security_group_id            = aws_security_group.rotation_lambda.id
@@ -168,7 +168,7 @@ resource "aws_vpc_security_group_egress_rule" "rotation_to_rds" {
   to_port     = 5432
 }
 resource "aws_vpc_security_group_egress_rule" "secrets_manager_https" {
-  security_group_id            = aws_security_group.rotation_lambda.id
+  security_group_id = aws_security_group.rotation_lambda.id
   cidr_ipv4         = "0.0.0.0/0"
 
   ip_protocol = "tcp"
@@ -215,31 +215,31 @@ resource "aws_db_parameter_group" "this" {
   tags = var.tags
 }
 resource "aws_db_instance" "this" {
-  identifier                  = var.name
-  engine                      = "postgres"
-  engine_version              = "16"
-  instance_class              = var.rds_instance_class
-  allocated_storage           = 20
-  max_allocated_storage       = 50
-  storage_type                = "gp3"
-  storage_encrypted           = true
-  kms_key_id                  = var.data_kms_key_arn
-  db_name                     = null
-  username                    = "mlflowops_admin"
-  manage_master_user_password = true
+  identifier                    = var.name
+  engine                        = "postgres"
+  engine_version                = "16"
+  instance_class                = var.rds_instance_class
+  allocated_storage             = 20
+  max_allocated_storage         = 50
+  storage_type                  = "gp3"
+  storage_encrypted             = true
+  kms_key_id                    = var.data_kms_key_arn
+  db_name                       = null
+  username                      = "mlflowops_admin"
+  manage_master_user_password   = true
   master_user_secret_kms_key_id = var.data_kms_key_arn
-  db_subnet_group_name        = aws_db_subnet_group.this.name
-  vpc_security_group_ids      = [aws_security_group.rds.id]
-  parameter_group_name        = aws_db_parameter_group.this.name
-  publicly_accessible         = false
-  multi_az                    = false
-  backup_retention_period     = 7
-  auto_minor_version_upgrade  = true
-  apply_immediately           = false
-  skip_final_snapshot         = true
-  deletion_protection         = false
-  copy_tags_to_snapshot       = true
-  tags                        = var.tags
+  db_subnet_group_name          = aws_db_subnet_group.this.name
+  vpc_security_group_ids        = [aws_security_group.rds.id]
+  parameter_group_name          = aws_db_parameter_group.this.name
+  publicly_accessible           = false
+  multi_az                      = false
+  backup_retention_period       = 7
+  auto_minor_version_upgrade    = true
+  apply_immediately             = false
+  skip_final_snapshot           = true
+  deletion_protection           = false
+  copy_tags_to_snapshot         = true
+  tags                          = var.tags
 }
 
 resource "random_password" "app" {
@@ -255,8 +255,8 @@ resource "aws_secretsmanager_secret" "app" {
   tags       = var.tags
 }
 resource "aws_secretsmanager_secret_version" "app" {
-  for_each      = local.app_credentials
-  secret_id     = aws_secretsmanager_secret.app[each.key].id
+  for_each  = local.app_credentials
+  secret_id = aws_secretsmanager_secret.app[each.key].id
   secret_string = jsonencode({
     engine   = "postgres"
     host     = aws_db_instance.this.address
@@ -271,18 +271,18 @@ resource "aws_secretsmanager_secret_version" "app" {
 # AWS's maintained single-user PostgreSQL rotation app is deployed from SAR (published only in us-east-1).
 # The app creates a Lambda function whose ARN is consumed by both secret rotation schedules.
 resource "aws_serverlessapplicationrepository_cloudformation_stack" "rotation" {
-  name           = "${var.name}-postgres-rotation"
+  name             = "${var.name}-postgres-rotation"
   semantic_version = var.rotation_app_version
-  application_id = "arn:aws:serverlessrepo:us-east-1:297356227824:applications/SecretsManagerRDSPostgreSQLRotationSingleUser"
-  capabilities   = ["CAPABILITY_IAM", "CAPABILITY_RESOURCE_POLICY"]
+  application_id   = "arn:aws:serverlessrepo:us-east-1:297356227824:applications/SecretsManagerRDSPostgreSQLRotationSingleUser"
+  capabilities     = ["CAPABILITY_IAM", "CAPABILITY_RESOURCE_POLICY"]
   parameters = {
-    functionName         = "${var.name}-postgres-rotation"
-    endpoint             = "https://secretsmanager.${var.region}.${data.aws_partition.current.dns_suffix}"
-    kmsKeyArn            = var.data_kms_key_arn
-    vpcSecurityGroupIds  = aws_security_group.rotation_lambda.id
-    vpcSubnetIds         = join(",", var.private_subnet_ids)
+    functionName        = "${var.name}-postgres-rotation"
+    endpoint            = "https://secretsmanager.${var.region}.${data.aws_partition.current.dns_suffix}"
+    kmsKeyArn           = var.data_kms_key_arn
+    vpcSecurityGroupIds = aws_security_group.rotation_lambda.id
+    vpcSubnetIds        = join(",", var.private_subnet_ids)
   }
-  tags = var.tags
+  tags       = var.tags
   depends_on = [aws_db_instance.this, aws_secretsmanager_secret_version.app]
 }
 
@@ -292,11 +292,11 @@ data "aws_lambda_function" "rotation" {
 }
 
 resource "aws_lambda_permission" "rotation" {
-  for_each      = aws_secretsmanager_secret.app
-  statement_id  = "AllowSecretsManagerRotation-${each.key}"
-  action        = "lambda:InvokeFunction"
-  function_name = data.aws_lambda_function.rotation.function_name
-  principal     = "secretsmanager.amazonaws.com"
+  for_each       = aws_secretsmanager_secret.app
+  statement_id   = "AllowSecretsManagerRotation-${each.key}"
+  action         = "lambda:InvokeFunction"
+  function_name  = data.aws_lambda_function.rotation.function_name
+  principal      = "secretsmanager.amazonaws.com"
   source_account = data.aws_caller_identity.current.account_id
   source_arn     = each.value.arn
 }

@@ -10,8 +10,8 @@ resource "aws_kms_key" "this" {
   description             = "${var.name} ${each.key} encryption key"
   enable_key_rotation     = true
   deletion_window_in_days = 30
-  policy = each.key == "audit" ? data.aws_iam_policy_document.audit[0].json : data.aws_iam_policy_document.account_root.json
-  tags   = var.tags
+  policy                  = each.key == "audit" ? data.aws_iam_policy_document.audit[0].json : data.aws_iam_policy_document.account_root.json
+  tags                    = var.tags
 }
 
 resource "aws_kms_alias" "this" {
@@ -35,7 +35,7 @@ data "aws_iam_policy_document" "account_root" {
 }
 
 data "aws_iam_policy_document" "audit" {
-  count = 1
+  count                   = 1
   source_policy_documents = [data.aws_iam_policy_document.account_root.json]
   # CloudTrail may generate data keys only when writing this specific trail.
   statement {
@@ -75,4 +75,4 @@ data "aws_iam_policy_document" "audit" {
 }
 
 output "key_arns" { value = { for k, v in aws_kms_key.this : k => v.arn } }
-output "key_ids"  { value = { for k, v in aws_kms_key.this : k => v.key_id } }
+output "key_ids" { value = { for k, v in aws_kms_key.this : k => v.key_id } }

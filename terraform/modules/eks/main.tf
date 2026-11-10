@@ -36,8 +36,8 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "21.29.0"
 
-  name               = var.name
-  kubernetes_version = var.kubernetes_version
+  name                = var.name
+  kubernetes_version  = var.kubernetes_version
   authentication_mode = "API"
 
   endpoint_private_access      = true
@@ -50,7 +50,7 @@ module "eks" {
       principal_arn = arn
       policy_associations = {
         cluster_admin = {
-          policy_arn = "arn:${data.aws_partition.current.partition}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          policy_arn   = "arn:${data.aws_partition.current.partition}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
           access_scope = { type = "cluster" }
         }
       }
@@ -61,7 +61,7 @@ module "eks" {
     provider_key_arn = var.eks_kms_key_arn
     resources        = ["secrets"]
   }
-  enabled_log_types                   = ["api", "audit", "authenticator"]
+  enabled_log_types                      = ["api", "audit", "authenticator"]
   cloudwatch_log_group_retention_in_days = 14
 
   vpc_id                   = var.vpc_id
@@ -74,14 +74,14 @@ module "eks" {
       most_recent          = true
       configuration_values = jsonencode({ enableNetworkPolicy = "true" })
     }
-    coredns = { most_recent = true }
+    coredns    = { most_recent = true }
     kube-proxy = { most_recent = true }
     eks-pod-identity-agent = {
       before_compute = true
       most_recent    = true
     }
     aws-ebs-csi-driver = {
-      most_recent = true
+      most_recent              = true
       pod_identity_association = [{ service_account = "ebs-csi-controller-sa", role_arn = aws_iam_role.ebs_csi.arn }]
     }
   }
@@ -118,21 +118,21 @@ module "eks" {
   }
 
   node_security_group_tags = merge(var.tags, { "karpenter.sh/discovery" = var.name })
-  tags = var.tags
+  tags                     = var.tags
 }
 
 module "karpenter" {
   source  = "terraform-aws-modules/eks/aws//modules/karpenter"
   version = "21.29.0"
 
-  cluster_name                       = module.eks.cluster_name
-  namespace                          = "kube-system"
-  service_account                    = "karpenter"
-  create_pod_identity_association     = true
-  create_instance_profile             = false
-  enable_inline_policy = true
-  node_iam_role_name                  = "${var.name}-karpenter-node"
-  node_iam_role_use_name_prefix       = false
+  cluster_name                    = module.eks.cluster_name
+  namespace                       = "kube-system"
+  service_account                 = "karpenter"
+  create_pod_identity_association = true
+  create_instance_profile         = false
+  enable_inline_policy            = true
+  node_iam_role_name              = "${var.name}-karpenter-node"
+  node_iam_role_use_name_prefix   = false
   node_iam_role_additional_policies = {
     ssm = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
   }
@@ -141,7 +141,7 @@ module "karpenter" {
 
 # Avoid a create failure in accounts where the Spot service-linked role already exists.
 data "aws_iam_roles" "spot_service_linked" {
-  name_regex = "^AWSServiceRoleForEC2Spot$"
+  name_regex  = "^AWSServiceRoleForEC2Spot$"
   path_prefix = "/aws-service-role/spot.amazonaws.com/"
 }
 

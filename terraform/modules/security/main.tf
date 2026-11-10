@@ -3,14 +3,14 @@ data "aws_partition" "current" {}
 data "aws_region" "current" {}
 
 resource "aws_guardduty_detector" "this" {
-  count          = var.manage_guard_detector ? 1 : 0
+  count                        = var.manage_guard_detector ? 1 : 0
   enable                       = true
   finding_publishing_frequency = "FIFTEEN_MINUTES"
-  tags = var.tags
+  tags                         = var.tags
 }
 
 data "aws_guardduty_detector" "this" {
-  count          = var.manage_guard_detector ? 0 : 1
+  count = var.manage_guard_detector ? 0 : 1
 }
 
 
@@ -49,8 +49,8 @@ resource "aws_iam_role_policy" "cloudtrail_to_cloudwatch" {
     Version = "2012-10-17"
     # CloudTrail can create streams and write events only to its dedicated log group.
     Statement = [{
-      Effect = "Allow"
-      Action = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
       Resource = "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
     }]
   })
@@ -71,7 +71,7 @@ resource "aws_cloudtrail" "this" {
     read_write_type           = "All"
     include_management_events = true
   }
-  tags = var.tags
+  tags       = var.tags
   depends_on = [aws_iam_role_policy.cloudtrail_to_cloudwatch]
 }
 
@@ -83,14 +83,14 @@ resource "aws_glue_catalog_table" "cloudtrail" {
   database_name = aws_glue_catalog_database.audit.name
   table_type    = "EXTERNAL_TABLE"
   parameters = {
-    EXTERNAL = "TRUE"
-    "projection.enabled" = "true"
-    "projection.timestamp.type" = "date"
-    "projection.timestamp.format" = "yyyy/MM/dd"
-    "projection.timestamp.range" = "2026/01/01,NOW"
-    "projection.timestamp.interval" = "1"
+    EXTERNAL                             = "TRUE"
+    "projection.enabled"                 = "true"
+    "projection.timestamp.type"          = "date"
+    "projection.timestamp.format"        = "yyyy/MM/dd"
+    "projection.timestamp.range"         = "2026/01/01,NOW"
+    "projection.timestamp.interval"      = "1"
     "projection.timestamp.interval.unit" = "DAYS"
-    "storage.location.template" = "s3://${var.audit_bucket_name}/cloudtrail/AWSLogs/${data.aws_caller_identity.current.account_id}/CloudTrail/${var.region}/$${timestamp}/"
+    "storage.location.template"          = "s3://${var.audit_bucket_name}/cloudtrail/AWSLogs/${data.aws_caller_identity.current.account_id}/CloudTrail/${var.region}/$${timestamp}/"
   }
   storage_descriptor {
     location      = "s3://${var.audit_bucket_name}/cloudtrail/AWSLogs/${data.aws_caller_identity.current.account_id}/CloudTrail/${var.region}/"
@@ -143,7 +143,7 @@ resource "aws_athena_workgroup" "this" {
       output_location = "s3://${var.audit_bucket_name}/athena-results/"
       encryption_configuration {
         encryption_option = "SSE_KMS"
-        kms_key_arn           = var.audit_kms_key_arn
+        kms_key_arn       = var.audit_kms_key_arn
       }
     }
   }
