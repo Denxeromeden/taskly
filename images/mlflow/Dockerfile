@@ -18,9 +18,14 @@ RUN groupadd --gid 10001 mlflow \
 WORKDIR /app
 
 # Dependencies first so entrypoint changes do not invalidate the install layer.
+# The constraint file pins the mlflow version shared with the ml-jobs image.
+COPY constraints/ml-runtime.txt /tmp/ml-runtime.txt
 COPY images/mlflow/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --no-compile -r /tmp/requirements.txt \
- && rm -f /tmp/requirements.txt
+RUN pip install --no-cache-dir --no-compile \
+      -r /tmp/requirements.txt \
+      -c /tmp/ml-runtime.txt \
+ && pip check \
+ && rm -f /tmp/requirements.txt /tmp/ml-runtime.txt
 
 COPY --chown=10001:10001 images/mlflow/entrypoint.py /app/entrypoint.py
 

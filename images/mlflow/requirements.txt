@@ -1,7 +1,7 @@
 # Tracking server only: training and serving dependencies are not installed here.
-mlflow==2.22.5
-# sqlalchemy 2.1 removed sqlalchemy.pool.FallbackAsyncAdaptedQueuePool, which
-# mlflow 2.22.5 imports from mlflow.store.db.utils at startup.
-sqlalchemy==2.0.57
-psycopg2-binary==2.9.13
+# Exact versions for mlflow, sqlalchemy and psycopg2-binary come from
+# constraints/ml-runtime.txt, which the Dockerfile applies.
+mlflow
+psycopg2-binary
+# Server-only: MLflow writes proxied artifacts to S3 through boto3.
 boto3==1.43.127

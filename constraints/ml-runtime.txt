@@ -1,0 +1,19 @@
+# Exact runtime pins applied to every image that ships the ML runtime: the
+# tracking server (full mlflow), the ml-jobs training image and serving.
+# Training logs the sklearn pipeline and serving deserializes it, so both must
+# install the same MLflow and scikit-learn versions.
+# Full mlflow depends on mlflow-skinny at the same version, so these two pins
+# also keep the server and its clients on one release.
+mlflow==2.22.5
+mlflow-skinny==2.22.5
+scikit-learn==1.9.1
+numpy==2.5.4
+scipy==1.18.1
+pandas==2.3.3
+cloudpickle==3.1.2
+joblib==1.6.0
+threadpoolctl==3.8.0
+# sqlalchemy 2.1 removed sqlalchemy.pool.FallbackAsyncAdaptedQueuePool, which
+# mlflow 2.22.5 imports from mlflow.store.db.utils at startup.
+sqlalchemy==2.0.57
+psycopg2-binary==2.9.13
