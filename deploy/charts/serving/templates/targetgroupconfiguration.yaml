@@ -1,0 +1,19 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: gateway.k8s.aws/v1
+kind: TargetGroupConfiguration
+metadata:
+  name: serving-api-targets
+  namespace: {{ .Values.namespace | quote }}
+spec:
+  targetReference:
+    kind: Service
+    name: serving-api
+  defaultConfiguration:
+    targetType: ip
+    healthCheckConfig:
+      healthCheckProtocol: HTTP
+      healthCheckPath: /health
+      healthCheckPort: "8000"
+      matcher:
+        httpCode: "200"
+{{- end }}

@@ -12,3 +12,5 @@ autoscaling:
 
 gateway:
   enabled: true
+  # Supply at render/deploy time from the platform Terraform certificate_arn output.
+  certificateArn: ""

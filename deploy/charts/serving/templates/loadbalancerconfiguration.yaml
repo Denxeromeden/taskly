@@ -1,0 +1,14 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: gateway.k8s.aws/v1
+kind: LoadBalancerConfiguration
+metadata:
+  name: serving-public-lb
+  namespace: {{ .Values.namespace | quote }}
+spec:
+  scheme: internet-facing
+  sourceRanges:
+    - 0.0.0.0/0
+  listenerConfigurations:
+    - protocolPort: HTTPS:443
+      defaultCertificate: {{ required "gateway.certificateArn must be set to the ACM certificate ARN from the platform Terraform output" .Values.gateway.certificateArn | quote }}
+{{- end }}

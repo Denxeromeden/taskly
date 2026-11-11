@@ -62,3 +62,5 @@ autoscaling:
 
 gateway:
   enabled: false
+  # Supply the ACM certificate ARN from the platform Terraform output.
+  certificateArn: ""
