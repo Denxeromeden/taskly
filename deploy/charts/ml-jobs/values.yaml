@@ -1,0 +1,6 @@
+# One service account per Job type. None of these Jobs needs the Kubernetes API
+# or an AWS identity, so token mounting stays disabled on all three.
+serviceAccounts:
+  - seed
+  - add-data
+  - training
