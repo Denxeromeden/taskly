@@ -1,0 +1,14 @@
+namespace: production
+replicaCount: 2
+
+model:
+  alias: production
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+gateway:
+  enabled: true

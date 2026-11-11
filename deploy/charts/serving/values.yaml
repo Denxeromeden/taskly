@@ -1,0 +1,64 @@
+# Set namespace to match the Argo CD destination namespace or Helm release namespace.
+namespace: staging
+
+replicaCount: 1
+
+image:
+  # Supply the fully-qualified immutable ECR image and Git-SHA tag at deploy time.
+  # Use the same repository and tag for staging and production in a given release.
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  name: serving
+
+model:
+  name: task-priority-classifier
+  alias: staging
+
+mlflow:
+  trackingUri: http://mlflow.mlflow.svc.cluster.local:5000
+
+service:
+  port: 8000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 768Mi
+
+# Keep serving on the existing on-demand Karpenter pool, never the training Spot pool.
+nodeSelector:
+  workload: general
+
+termination:
+  gracePeriodSeconds: 30
+  preStopSleepSeconds: 5
+
+tmp:
+  sizeLimit: 256Mi
+
+probes:
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 12
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+gateway:
+  enabled: false

@@ -1,0 +1,5 @@
+apiVersion: v2
+name: serving
+description: Taskly model-serving API for staging and production
+type: application
+version: 0.1.0

@@ -1,0 +1,11 @@
+namespace: staging
+replicaCount: 1
+
+model:
+  alias: staging
+
+autoscaling:
+  enabled: false
+
+gateway:
+  enabled: false
