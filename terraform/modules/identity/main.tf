@@ -5,9 +5,9 @@ locals {
   cluster_arn           = var.cluster_arn
   github_subject_prefix = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
   repo_subjects = [
-    "repo:${local.github_subject_prefix}:ref:refs/heads/main",
-    "repo:${local.github_subject_prefix}:environment:staging",
-    "repo:${local.github_subject_prefix}:environment:production"
+    "${local.github_subject_prefix}:ref:refs/heads/main",
+    "${local.github_subject_prefix}:environment:staging",
+    "${local.github_subject_prefix}:environment:production"
   ]
   ecr_arns = [for name in ["serving", "ml-jobs", "mlflow"] : "arn:${data.aws_partition.current.partition}:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/mlflowops/${name}"]
 }
