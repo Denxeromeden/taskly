@@ -167,7 +167,7 @@ jobs:
           done
 
       - name: Run TFLint
-        run: tflint --recursive
+        run: tflint --recursive --minimum-failure-severity=error
 
   checkov:
     name: Checkov Terraform security scan
