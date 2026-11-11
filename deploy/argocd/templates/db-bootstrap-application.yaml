@@ -8,8 +8,8 @@ metadata:
 spec:
   project: platform
   source:
-    repoURL: https://github.com/Denxeromeden/taskly
-    targetRevision: main
+    repoURL: {{ required "repoURL is required" .Values.repoURL | quote }}
+    targetRevision: {{ required "targetRevision is required" .Values.targetRevision | quote }}
     path: deploy/charts/db-bootstrap
     helm:
       releaseName: db-bootstrap

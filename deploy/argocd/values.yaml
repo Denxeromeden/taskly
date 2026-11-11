@@ -1,0 +1,8 @@
+repoURL: ""
+targetRevision: ""
+
+applications:
+  servingStaging:
+    enabled: false
+  servingProduction:
+    enabled: false

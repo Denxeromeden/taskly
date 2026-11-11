@@ -9,6 +9,14 @@ spec:
     repoURL: {{ .Values.repoURL | quote }}
     targetRevision: {{ .Values.targetRevision | quote }}
     path: deploy/argocd
+    helm:
+      parameters:
+        - name: repoURL
+          value: {{ .Values.repoURL | quote }}
+          forceString: true
+        - name: targetRevision
+          value: {{ .Values.targetRevision | quote }}
+          forceString: true
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

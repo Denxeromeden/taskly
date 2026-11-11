@@ -1,0 +1,28 @@
+{{- if .Values.applications.servingStaging.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: serving-staging
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: serving
+  source:
+    repoURL: {{ required "repoURL is required" .Values.repoURL | quote }}
+    targetRevision: {{ required "targetRevision is required" .Values.targetRevision | quote }}
+    path: deploy/charts/serving
+    helm:
+      releaseName: serving-api
+      valueFiles:
+        - values-staging.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+{{- end }}

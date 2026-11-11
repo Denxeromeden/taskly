@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ml-jobs
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: platform
+  source:
+    repoURL: {{ required "repoURL is required" .Values.repoURL | quote }}
+    targetRevision: {{ required "targetRevision is required" .Values.targetRevision | quote }}
+    path: deploy/charts/ml-jobs
+    helm:
+      releaseName: ml-jobs
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ml-jobs
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

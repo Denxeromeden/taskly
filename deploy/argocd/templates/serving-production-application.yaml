@@ -1,0 +1,26 @@
+{{- if .Values.applications.servingProduction.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: serving-production
+  namespace: argocd
+spec:
+  project: serving
+  source:
+    repoURL: {{ required "repoURL is required" .Values.repoURL | quote }}
+    targetRevision: {{ required "targetRevision is required" .Values.targetRevision | quote }}
+    path: deploy/charts/serving
+    helm:
+      releaseName: serving-api
+      valueFiles:
+        - values-production.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: production
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+{{- end }}
