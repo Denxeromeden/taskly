@@ -34,9 +34,7 @@ RUN pip install --no-cache-dir --no-compile \
  && pip check \
  && rm -f /tmp/model-requirements.txt /tmp/ml-runtime.txt
 
-# Training reads these paths relative to /app, so Jobs use the same commands as
-# a local checkout: `python model/train.py`, `python model/generate_data.py`.
-COPY --chown=10001:10001 model/train.py model/generate_data.py /app/model/
-COPY --chown=10001:10001 jobs/entrypoint.py /app/jobs/
+# Job commands use these paths relative to /app, as they do in a local checkout.
+COPY --chown=10001:10001 model/train.py model/generate_data.py model/simulate_data.py /app/model/
 
 USER 10001:10001
