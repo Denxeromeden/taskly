@@ -21,7 +21,10 @@ from prometheus_client import (
     generate_latest,
 )
 
+from .logging_config import configure_logging
 from .model_registry import load_registered_model
+
+configure_logging()
 
 PRIORITIES = frozenset({"low", "medium", "high"})
 UNLOADED_MODEL_VERSION = "unloaded"
@@ -109,6 +112,12 @@ def set_loaded_model(app: FastAPI, model: Predictor, model_version: str) -> None
 
 def _load_model_in_background(app: FastAPI) -> None:
     """Load the registry model without blocking liveness endpoints."""
+    logger.info(
+        json.dumps(
+            {"event": "model_load_started", "model_version": UNLOADED_MODEL_VERSION},
+            separators=(",", ":"),
+        )
+    )
     try:
         model, model_version = load_registered_model()
         if app.state.shutting_down:
@@ -137,6 +146,15 @@ def _load_model_in_background(app: FastAPI) -> None:
 async def lifespan(app: FastAPI):
     """Start registry loading while keeping the API process responsive."""
     app.state.shutting_down = False
+    logger.info(
+        json.dumps(
+            {
+                "event": "application_starting",
+                "model_version": app.state.model_version or UNLOADED_MODEL_VERSION,
+            },
+            separators=(",", ":"),
+        )
+    )
     loader_thread = None
     if app.state.loaded_model is None:
         loader_thread = threading.Thread(
@@ -152,6 +170,15 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         app.state.shutting_down = True
+        logger.info(
+            json.dumps(
+                {
+                    "event": "application_stopping",
+                    "model_version": app.state.model_version or UNLOADED_MODEL_VERSION,
+                },
+                separators=(",", ":"),
+            )
+        )
 
 
 def create_app(
@@ -180,15 +207,42 @@ def create_app(
         version = loaded_model[1] if loaded_model is not None else UNLOADED_MODEL_VERSION
         started = perf_counter()
         outcome = "error"
+        response: Response | None = None
         try:
             response = await call_next(request)
             outcome = "success" if response.status_code < 400 else "error"
             return response
+        except Exception as exc:
+            logger.error(
+                json.dumps(
+                    {
+                        "event": "prediction_request_failed",
+                        "model_version": version,
+                        "error_type": type(exc).__name__,
+                    },
+                    separators=(",", ":"),
+                )
+            )
+            raise
         finally:
             elapsed = perf_counter() - started
+            status_code = response.status_code if response is not None else 500
             metrics: PredictionMetrics = request.app.state.metrics
             metrics.requests.labels(model_version=version, outcome=outcome).inc()
             metrics.duration.labels(model_version=version).observe(elapsed)
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "prediction_request",
+                        "model_version": version,
+                        "method": request.method,
+                        "path": request.url.path,
+                        "status_code": status_code,
+                        "duration_seconds": round(elapsed, 6),
+                    },
+                    separators=(",", ":"),
+                )
+            )
 
     @app.post("/predict", response_model=PredictionResponse)
     def predict(payload: PredictionRequest, request: Request) -> PredictionResponse:

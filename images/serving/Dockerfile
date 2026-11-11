@@ -9,7 +9,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
-    HOME=/tmp
+    HOME=/tmp \
+    TMPDIR=/tmp \
+    XDG_CACHE_HOME=/tmp/.cache
 
 RUN groupadd --gid 10001 serving \
  && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin serving
@@ -32,4 +34,4 @@ USER 10001:10001
 
 EXPOSE 8000
 
-CMD ["uvicorn", "serving.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "serving.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
