@@ -1,0 +1,342 @@
+name: CI security
+
+on:
+  workflow_dispatch:
+#  pull_request:
+#    branches:
+#      - main
+#  push:
+#    branches:
+#      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    name: Python unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        # actions/setup-python v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            model/requirements.txt
+            images/mlflow/requirements.txt
+            serving/requirements.txt
+            constraints/ml-runtime.txt
+
+      - name: Install project runtime and test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements-dev.txt
+          python -m pip install --disable-pip-version-check \
+            -r model/requirements.txt \
+            -c constraints/ml-runtime.txt
+          python -m pip install --disable-pip-version-check \
+            -r images/mlflow/requirements.txt \
+            -c constraints/ml-runtime.txt
+          python -m pip install --disable-pip-version-check \
+            -r serving/requirements.txt \
+            -c constraints/ml-runtime.txt
+          python -m pip check
+
+      - name: Run Taskly, ML jobs and serving unit tests
+        run: python -m pytest -q tests serving/tests
+
+  dependency-audit:
+    name: pip-audit runtime dependency sets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        # actions/setup-python v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned pip-audit
+        run: python -m pip install --disable-pip-version-check pip-audit==2.10.1
+
+      - name: Audit Taskly API runtime dependencies
+        run: pip-audit --requirement requirements.txt
+
+      - name: Audit MLflow, jobs and serving runtime dependencies
+        # The shared constraints are passed as requirements so their exact pins are audited.
+        run: >-
+          pip-audit
+          --requirement model/requirements.txt
+          --requirement constraints/ml-runtime.txt
+          --requirement images/mlflow/requirements.txt
+          --requirement serving/requirements.txt
+
+  semgrep:
+    name: Semgrep Python and YAML scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        # actions/setup-python v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned Semgrep
+        run: python -m pip install --disable-pip-version-check semgrep==1.185.0
+
+      - name: Scan Python and YAML files
+        run: >-
+          semgrep scan
+          --config auto
+          --severity ERROR
+          --error
+          --metrics=off
+          --include '*.py'
+          --include '*.yaml'
+          --include '*.yml'
+          .
+
+  terraform-security:
+    name: Terraform static validation and Checkov
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        # hashicorp/setup-terraform v4.0.1
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: "1.17.1"
+          terraform_wrapper: false
+
+      - name: Set up TFLint
+        # terraform-linters/setup-tflint v6.3.2
+        uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337
+        with:
+          tflint_version: v0.66.0
+
+      - name: Set up Python for Checkov
+        # actions/setup-python v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive terraform
+
+      - name: Initialize and validate every Terraform stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          for stack in bootstrap infra platform; do
+            terraform -chdir="terraform/${stack}" init -backend=false -input=false
+            terraform -chdir="terraform/${stack}" validate -no-color
+          done
+
+      - name: Run TFLint
+        run: tflint --recursive
+
+      - name: Install pinned Checkov
+        run: python -m pip install --disable-pip-version-check checkov==3.4.3
+
+      - name: Scan Terraform source
+        # HIGH and CRITICAL fail; LOW and MEDIUM findings are reported but do not block.
+        run: >-
+          checkov
+          --directory terraform
+          --framework terraform
+          --hard-fail-on HIGH,CRITICAL
+          --soft-fail-on LOW,MEDIUM
+
+  trivy-filesystem:
+    name: Trivy filesystem scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Scan repository and dependency build contexts
+        # Trivy v0.76.2; unfixed findings are excluded from blocking results.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          version: v0.76.2
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  helm-validation:
+    name: Helm lint and template validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm 3
+        # Azure/setup-helm v5.1.0
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e
+        with:
+          version: v3.22.1
+
+      - name: Lint and render Argo CD Application chart
+        run: |
+          helm lint deploy/argocd \
+            --set-string repoURL=https://github.com/Denxeromeden/taskly \
+            --set-string targetRevision=main
+          helm template ci deploy/argocd \
+            --namespace argocd \
+            --set-string repoURL=https://github.com/Denxeromeden/taskly \
+            --set-string targetRevision=main >/dev/null
+          # Render optional child Applications too; this does not enable them in Git.
+          helm template ci-enabled deploy/argocd \
+            --namespace argocd \
+            --set-string repoURL=https://github.com/Denxeromeden/taskly \
+            --set-string targetRevision=main \
+            --set applications.servingStaging.enabled=true \
+            --set applications.servingProduction.enabled=true >/dev/null
+
+      - name: Lint and render foundation and workload charts
+        run: |
+          set -euo pipefail
+
+          helm lint deploy/charts/argocd-bootstrap
+          helm template ci deploy/charts/argocd-bootstrap --namespace argocd >/dev/null
+
+          helm lint deploy/charts/db-bootstrap
+          helm template ci deploy/charts/db-bootstrap --namespace ml-jobs >/dev/null
+
+          helm lint deploy/charts/karpenter-config
+          helm template ci deploy/charts/karpenter-config --namespace kube-system >/dev/null
+
+          helm lint deploy/charts/ml-jobs
+          helm template ci deploy/charts/ml-jobs --namespace ml-jobs >/dev/null
+
+          helm lint deploy/charts/mlflow \
+            --set-string artifacts.bucket=ci-artifacts-bucket \
+            --set-string image.tag=ci
+          helm template ci deploy/charts/mlflow \
+            --namespace mlflow \
+            --set-string artifacts.bucket=ci-artifacts-bucket \
+            --set-string image.tag=ci >/dev/null
+
+          helm lint deploy/charts/platform-base \
+            --set-string artifactsBucket=ci-artifacts-bucket \
+            --set-string rdsMasterSecretArn=arn:aws:secretsmanager:eu-central-1:000000000000:secret:ci-placeholder
+          helm template ci deploy/charts/platform-base \
+            --namespace kube-system \
+            --set-string artifactsBucket=ci-artifacts-bucket \
+            --set-string rdsMasterSecretArn=arn:aws:secretsmanager:eu-central-1:000000000000:secret:ci-placeholder >/dev/null
+
+      - name: Lint and render staging serving chart
+        run: |
+          helm lint deploy/charts/serving \
+            --values deploy/charts/serving/values-staging.yaml \
+            --set-string image.repository=000000000000.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/serving \
+            --set-string image.tag=ci
+          helm template ci deploy/charts/serving \
+            --namespace staging \
+            --values deploy/charts/serving/values-staging.yaml \
+            --set-string image.repository=000000000000.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/serving \
+            --set-string image.tag=ci >/dev/null
+
+      - name: Lint and render production serving chart
+        run: |
+          helm lint deploy/charts/serving \
+            --values deploy/charts/serving/values-production.yaml \
+            --set-string image.repository=000000000000.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/serving \
+            --set-string image.tag=ci \
+            --set-string gateway.certificateArn=arn:aws:acm:eu-central-1:000000000000:certificate/00000000-0000-0000-0000-000000000000 \
+            --set-json networkPolicy.publicSubnetCidrs='["10.0.0.0/24"]'
+          helm template ci deploy/charts/serving \
+            --namespace production \
+            --values deploy/charts/serving/values-production.yaml \
+            --set-string image.repository=000000000000.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/serving \
+            --set-string image.tag=ci \
+            --set-string gateway.certificateArn=arn:aws:acm:eu-central-1:000000000000:certificate/00000000-0000-0000-0000-000000000000 \
+            --set-json networkPolicy.publicSubnetCidrs='["10.0.0.0/24"]' >/dev/null
+
+  build-and-scan-images:
+    name: Build and scan ${{ matrix.component }} image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - python-tests
+      - dependency-audit
+      - semgrep
+      - terraform-security
+      - trivy-filesystem
+      - helm-validation
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: mlflow
+            dockerfile: images/mlflow/Dockerfile
+            image: local/mlflowops-mlflow
+          - component: ml-jobs
+            dockerfile: images/ml-jobs/Dockerfile
+            image: local/mlflowops-ml-jobs
+          - component: serving
+            dockerfile: images/serving/Dockerfile
+            image: local/mlflowops-serving
+    steps:
+      - name: Check out source
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build image from repository root
+        env:
+          IMAGE: ${{ matrix.image }}:${{ github.sha }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: docker build --pull --file "$DOCKERFILE" --tag "$IMAGE" .
+
+      - name: Scan built image
+        # Trivy v0.76.2; image scans block fixable CRITICAL vulnerabilities.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          version: v0.76.2
+          scan-type: image
+          image-ref: ${{ matrix.image }}:${{ github.sha }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
