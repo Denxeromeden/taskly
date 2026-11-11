@@ -1,0 +1,92 @@
+# Set JOB_NAME to a unique add-data-<run-id> name and ML_JOBS_IMAGE to a scanned Git-SHA image.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: ml-jobs
+  labels:
+    app.kubernetes.io/name: add-data
+    app.kubernetes.io/part-of: mlflowops
+    app.kubernetes.io/managed-by: github-actions
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: add-data
+        app.kubernetes.io/part-of: mlflowops
+    spec:
+      serviceAccountName: add-data
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: add-data
+          image: ${ML_JOBS_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - jobs/entrypoint.py
+            - add-data
+          env:
+            - name: TASKS_DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: tasks-db-credentials
+                  key: host
+            - name: TASKS_DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: tasks-db-credentials
+                  key: port
+            - name: TASKS_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: tasks-db-credentials
+                  key: dbname
+            - name: TASKS_DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: tasks-db-credentials
+                  key: username
+            - name: TASKS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tasks-db-credentials
+                  key: password
+            - name: ADD_DATA_ROWS
+              value: "${ADD_DATA_ROWS}"
+            - name: ADD_DATA_MODE
+              value: "${ADD_DATA_MODE}"
+            - name: ADD_DATA_LABEL_NOISE
+              value: "${ADD_DATA_LABEL_NOISE}"
+            - name: ADD_DATA_SEED
+              value: "${ADD_DATA_SEED}"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

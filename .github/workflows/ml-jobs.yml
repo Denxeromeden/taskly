@@ -1,0 +1,355 @@
+name: ML jobs
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Operation to run
+        type: choice
+        options:
+          - seed
+          - add-data
+          - train
+        default: train
+        required: true
+      mode:
+        description: Synthetic data mode (used only by add-data)
+        type: choice
+        options:
+          - normal
+          - drift
+        default: normal
+        required: true
+      rows:
+        description: Number of additional rows (add-data only, 1-5000)
+        type: string
+        default: "150"
+        required: true
+      label_noise:
+        description: Fraction of labels to flip (add-data only, 0.0-0.5)
+        type: string
+        default: "0.0"
+        required: true
+      seed:
+        description: Optional integer seed for reproducible add-data batches
+        type: string
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taskly-mlflow-training
+  cancel-in-progress: false
+
+jobs:
+  run-ml-job:
+    name: Run ${{ inputs.operation }} job
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out main
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Validate dispatch and resolve the immutable image tag
+        id: validate
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          MODE: ${{ inputs.mode }}
+          ROWS: ${{ inputs.rows }}
+          LABEL_NOISE: ${{ inputs.label_noise }}
+          DATA_SEED: ${{ inputs.seed }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "This workflow must be dispatched from main; AWS OIDC is restricted to that ref." >&2
+            exit 1
+          fi
+
+          case "$OPERATION" in
+            seed|add-data|train) ;;
+            *) echo "Unsupported operation: $OPERATION" >&2; exit 1 ;;
+          esac
+
+          case "$MODE" in
+            normal|drift) ;;
+            *) echo "Unsupported data mode: $MODE" >&2; exit 1 ;;
+          esac
+
+          if [[ "$OPERATION" == "add-data" ]]; then
+            python3 - "$ROWS" "$LABEL_NOISE" "$DATA_SEED" <<'PY'
+          from decimal import Decimal, InvalidOperation
+          import re
+          import sys
+
+          if not re.fullmatch(r"[0-9]+", sys.argv[1]):
+              raise SystemExit("rows must be an integer between 1 and 5000")
+          rows = int(sys.argv[1])
+          if not 1 <= rows <= 5000:
+              raise SystemExit("rows must be between 1 and 5000")
+          try:
+              noise = Decimal(sys.argv[2])
+          except InvalidOperation:
+              raise SystemExit("label_noise must be a decimal between 0.0 and 0.5")
+          if not noise.is_finite() or noise < 0 or noise > Decimal("0.5"):
+              raise SystemExit("label_noise must be between 0.0 and 0.5")
+          if sys.argv[3] and not re.fullmatch(r"-?[0-9]+", sys.argv[3]):
+              raise SystemExit("seed must be an integer when supplied")
+          PY
+          fi
+
+          IMAGE_TAG="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          values = Path("deploy/charts/mlflow/values-image.yaml").read_text(encoding="utf-8")
+          tags = re.findall(r"(?m)^[ ]{2}tag:[ ]*[\"']?([0-9a-f]{40})[\"']?[ ]*$", values)
+          if len(tags) != 1:
+              raise SystemExit(
+                  "values-image.yaml must contain one full Git-SHA tag from a successful main image build"
+              )
+          print(tags[0])
+          PY
+          )"
+
+          printf 'operation=%s\n' "$OPERATION" >> "$GITHUB_OUTPUT"
+          printf 'mode=%s\n' "$MODE" >> "$GITHUB_OUTPUT"
+          printf 'rows=%s\n' "$ROWS" >> "$GITHUB_OUTPUT"
+          printf 'label_noise=%s\n' "$LABEL_NOISE" >> "$GITHUB_OUTPUT"
+          printf 'seed=%s\n' "$DATA_SEED" >> "$GITHUB_OUTPUT"
+          printf 'image_tag=%s\n' "$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through GitHub OIDC
+        # aws-actions/configure-aws-credentials v6.3.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: taskly-ml-jobs-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Verify successful image publication in all ECR repositories
+        id: image
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          IMAGE_TAG: ${{ steps.validate.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "$AWS_REGION" ]] || { echo "Repository variable AWS_REGION is required." >&2; exit 1; }
+
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo "Could not resolve AWS account ID." >&2; exit 1; }
+          registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "::add-mask::$account_id"
+          echo "::add-mask::$registry"
+
+          for repository in mlflowops/mlflow mlflowops/ml-jobs mlflowops/serving; do
+            echo "Checking immutable image tag in ${repository}..."
+            aws ecr describe-images \
+              --region "$AWS_REGION" \
+              --repository-name "$repository" \
+              --image-ids "imageTag=${IMAGE_TAG}" \
+              >/dev/null
+          done
+
+          printf 'ml_jobs_image=%s\n' "${registry}/mlflowops/ml-jobs:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure kubectl for the existing EKS cluster
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name mlflowops-demo --region "$AWS_REGION" >/dev/null
+
+      - name: Create, wait for and inspect the selected workload
+        shell: bash
+        env:
+          OPERATION: ${{ steps.validate.outputs.operation }}
+          DATA_MODE: ${{ steps.validate.outputs.mode }}
+          DATA_ROWS: ${{ steps.validate.outputs.rows }}
+          DATA_LABEL_NOISE: ${{ steps.validate.outputs.label_noise }}
+          DATA_SEED: ${{ steps.validate.outputs.seed }}
+          ML_JOBS_IMAGE: ${{ steps.image.outputs.ml_jobs_image }}
+        run: |
+          set -euo pipefail
+
+          diagnose_job() {
+            local job_name="$1"
+            echo "--- Pods for ${job_name} ---"
+            kubectl -n ml-jobs get pods -l "job-name=${job_name}" -o wide || true
+            echo "--- Logs for ${job_name} ---"
+            kubectl -n ml-jobs logs "job/${job_name}" --all-containers=true --prefix || true
+            echo "--- Job details for ${job_name} ---"
+            kubectl -n ml-jobs describe job "$job_name" || true
+          }
+
+          create_job() {
+            local template="$1"
+            local job_name="$2"
+            export JOB_NAME="$job_name"
+            export ML_JOBS_IMAGE
+            export ADD_DATA_ROWS="$DATA_ROWS"
+            export ADD_DATA_MODE="$DATA_MODE"
+            export ADD_DATA_LABEL_NOISE="$DATA_LABEL_NOISE"
+            export ADD_DATA_SEED="$DATA_SEED"
+
+            python3 - "$template" <<'PY' | kubectl -n ml-jobs create -f -
+          from pathlib import Path
+          import os
+          import re
+          import sys
+
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          required = {"JOB_NAME", "ML_JOBS_IMAGE", "ADD_DATA_ROWS", "ADD_DATA_MODE", "ADD_DATA_LABEL_NOISE", "ADD_DATA_SEED"}
+
+          def replace(match):
+              name = match.group(1)
+              if name not in required:
+                  raise SystemExit(f"unexpected template variable: {name}")
+              if name not in os.environ:
+                  raise SystemExit(f"missing template variable: {name}")
+              return os.environ[name]
+
+          rendered = re.sub(r"\$\{([A-Z_]+)\}", replace, source)
+          if re.search(r"\$\{[A-Z_]+\}", rendered):
+              raise SystemExit("unresolved Job template variable")
+          sys.stdout.write(rendered)
+          PY
+          }
+
+          wait_for_job() {
+            local job_name="$1"
+            local timeout_seconds="$2"
+            local print_logs="${3:-true}"
+            local deadline=$(( $(date +%s) + timeout_seconds ))
+
+            while (( $(date +%s) < deadline )); do
+              local job_json
+              if ! job_json="$(kubectl -n ml-jobs get job "$job_name" -o json)"; then
+                echo "Could not read Job ${job_name}." >&2
+                diagnose_job "$job_name"
+                return 1
+              fi
+
+              local succeeded failed
+              succeeded="$(jq -r '.status.succeeded // 0' <<< "$job_json")"
+              failed="$(jq -r 'any(.status.conditions[]?; .type == "Failed" and .status == "True")' <<< "$job_json")"
+
+              if (( succeeded >= 1 )); then
+                if [[ "$print_logs" == "true" ]]; then
+                  kubectl -n ml-jobs logs "job/${job_name}" --all-containers=true --prefix
+                fi
+                return 0
+              fi
+
+              if [[ "$failed" == "true" ]]; then
+                echo "Job ${job_name} reached a failed condition." >&2
+                diagnose_job "$job_name"
+                return 1
+              fi
+              sleep 10
+            done
+
+            echo "Timed out waiting for Job ${job_name} after ${timeout_seconds}s." >&2
+            diagnose_job "$job_name"
+            return 1
+          }
+
+          wait_for_staging_rollout() {
+            local timeout_seconds=300
+            local initial
+            initial="$(kubectl -n staging get deployment serving-api -o json)"
+            local generation desired deadline
+            generation="$(jq -r '.metadata.generation' <<< "$initial")"
+            desired="$(jq -r '.spec.replicas // 1' <<< "$initial")"
+            deadline=$(( $(date +%s) + timeout_seconds ))
+
+            while (( $(date +%s) < deadline )); do
+              local current observed updated available failed
+              current="$(kubectl -n staging get deployment serving-api -o json)"
+              observed="$(jq -r '.status.observedGeneration // 0' <<< "$current")"
+              updated="$(jq -r '.status.updatedReplicas // 0' <<< "$current")"
+              available="$(jq -r '.status.availableReplicas // 0' <<< "$current")"
+              failed="$(jq -r 'any(.status.conditions[]?; .type == "Progressing" and .status == "False" and .reason == "ProgressDeadlineExceeded")' <<< "$current")"
+
+              if (( observed >= generation && updated >= desired && available >= desired )); then
+                echo "Staging serving-api rollout completed (${available}/${desired} replicas available)."
+                return 0
+              fi
+              if [[ "$failed" == "true" ]]; then
+                echo "Staging serving-api reported ProgressDeadlineExceeded." >&2
+                return 1
+              fi
+              sleep 5
+            done
+
+            echo "Timed out waiting for the staging serving-api Deployment to become available." >&2
+            kubectl -n staging get deployment serving-api -o wide || true
+            kubectl -n staging get pods -l app.kubernetes.io/name=serving -o wide || true
+            return 1
+          }
+
+          run_name="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          case "$OPERATION" in
+            seed)
+              job_name="seed-${run_name}"
+              create_job jobs/manifests/seed.yaml "$job_name"
+              wait_for_job "$job_name" 360
+              ;;
+            add-data)
+              job_name="add-data-${run_name}"
+              create_job jobs/manifests/add-data.yaml "$job_name"
+              wait_for_job "$job_name" 360
+              ;;
+            train)
+              train_job="train-${run_name}"
+              create_job jobs/manifests/train.yaml "$train_job"
+              # The Job's activeDeadlineSeconds is 1200; allow a short margin for status propagation.
+              if ! wait_for_job "$train_job" 1260; then
+                echo "Training did not complete on the Spot-only NodePool. Check pod scheduling events and Spot capacity; no on-demand fallback is configured." >&2
+                exit 1
+              fi
+
+              promote_job="promote-${run_name}"
+              create_job jobs/manifests/promote.yaml "$promote_job"
+              wait_for_job "$promote_job" 360 false
+              promotion_logs="$(kubectl -n ml-jobs logs "job/${promote_job}" --all-containers=true --prefix)"
+              printf '%s\n' "$promotion_logs"
+
+              if grep -Eq 'decision=(INITIAL_STAGING_CANDIDATE|PROMOTED_TO_STAGING)([[:space:]]|$)' <<< "$promotion_logs"; then
+                deployment_output=""
+                if deployment_output="$(kubectl -n staging get deployment serving-api -o json 2>&1)"; then
+                  kubectl -n staging rollout restart deployment/serving-api
+                  wait_for_staging_rollout
+                elif grep -Eqi 'notfound|not found' <<< "$deployment_output"; then
+                  echo "::notice::Promotion accepted and @staging is initialized, but serving-api is not deployed yet. Enable the serving-staging Argo CD Application; Argo CD will create the Deployment using @staging."
+                else
+                  printf '%s\n' "$deployment_output" >&2
+                  exit 1
+                fi
+              elif grep -Eq 'decision=REJECTED_METRIC_REGRESSION([[:space:]]|$)' <<< "$promotion_logs"; then
+                echo "Candidate rejected; staging alias and running Deployment were left unchanged."
+              else
+                echo "Promotion completed without a recognized decision; staging was not restarted." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported operation: $OPERATION" >&2
+              exit 1
+              ;;
+          esac
