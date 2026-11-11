@@ -237,6 +237,7 @@ resource "helm_release" "argocd_bootstrap" {
     targetRevision        = var.argocd_target_revision
     mlflowImageRepository = local.infra.ecr_repository_urls["mlflow"]
     mlflowRegion          = var.region
+    mlflowArtifactsBucket = local.infra.artifacts_bucket_name
   })]
   depends_on = [helm_release.argocd]
 }

@@ -22,6 +22,9 @@ spec:
         - name: region
           value: {{ required "mlflowRegion is required" .Values.mlflowRegion | quote }}
           forceString: true
+        - name: artifacts.bucket
+          value: {{ .Values.mlflowArtifactsBucket | quote }}
+          forceString: true
   destination:
     server: https://kubernetes.default.svc
     namespace: mlflow

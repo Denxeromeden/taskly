@@ -23,6 +23,9 @@ spec:
         - name: mlflowRegion
           value: {{ required "mlflowRegion is required" .Values.mlflowRegion | quote }}
           forceString: true
+        - name: mlflowArtifactsBucket
+          value: {{ .Values.mlflowArtifactsBucket | quote }}
+          forceString: true
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

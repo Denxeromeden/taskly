@@ -2,6 +2,7 @@ repoURL: ""
 targetRevision: ""
 mlflowImageRepository: ""
 mlflowRegion: ""
+mlflowArtifactsBucket: ""
 
 applications:
   servingStaging:

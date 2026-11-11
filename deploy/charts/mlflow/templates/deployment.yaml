@@ -44,7 +44,7 @@ spec:
             - name: MLFLOW_DB_SECRET_DIR
               value: {{ .Values.dbSecretMountPath | quote }}
             - name: MLFLOW_ARTIFACTS_BUCKET
-              value: {{ .Values.artifacts.bucket | quote }}
+              value: {{ required "artifacts.bucket is required" .Values.artifacts.bucket | quote }}
             - name: MLFLOW_ARTIFACTS_PREFIX
               value: {{ .Values.artifacts.prefix | quote }}
             - name: MLFLOW_SERVER_WORKERS
