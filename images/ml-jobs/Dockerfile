@@ -36,5 +36,6 @@ RUN pip install --no-cache-dir --no-compile \
 
 # Job commands use these paths relative to /app, as they do in a local checkout.
 COPY --chown=10001:10001 model/train.py model/generate_data.py model/simulate_data.py /app/model/
+COPY --chown=10001:10001 jobs/entrypoint.py /app/jobs/entrypoint.py
 
 USER 10001:10001
