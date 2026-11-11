@@ -120,8 +120,8 @@ jobs:
           --include '*.yml'
           .
 
-  terraform-security:
-    name: Terraform static validation and Checkov
+  terraform-validation:
+    name: Terraform formatting, validation and TFLint
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -143,12 +143,6 @@ jobs:
         with:
           tflint_version: v0.66.0
 
-      - name: Set up Python for Checkov
-        # actions/setup-python v7.1.0
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
-        with:
-          python-version: "3.12"
-
       - name: Check Terraform formatting
         run: terraform fmt -check -recursive terraform
 
@@ -164,6 +158,22 @@ jobs:
       - name: Run TFLint
         run: tflint --recursive
 
+  checkov:
+    name: Checkov Terraform security scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        # actions/setup-python v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
       - name: Install pinned Checkov
         run: python -m pip install --disable-pip-version-check checkov==3.4.3
 
@@ -177,7 +187,7 @@ jobs:
           --soft-fail-on LOW,MEDIUM
 
   trivy-filesystem:
-    name: Trivy filesystem scan
+    name: Trivy repository secrets and configuration scan
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -186,16 +196,28 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Scan repository and dependency build contexts
-        # Trivy v0.76.2; unfixed findings are excluded from blocking results.
+      - name: Scan the full repository for secrets
+        # Trivy v0.76.2; source-tree dependency vulnerabilities are audited separately.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           version: v0.76.2
           scan-type: fs
           scan-ref: .
-          scanners: vuln,misconfig,secret
+          scanners: secret
           severity: CRITICAL
-          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Scan non-Terraform files for configuration misconfigurations
+        # Terraform misconfiguration is owned by the Checkov job above.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          version: v0.76.2
+          skip-setup-trivy: true
+          scan-type: fs
+          scan-ref: .
+          skip-dirs: terraform
+          scanners: misconfig
+          severity: CRITICAL
           exit-code: "1"
 
   helm-validation:
@@ -293,12 +315,13 @@ jobs:
 
   build-and-scan-images:
     name: Build and scan ${{ matrix.component }} image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     needs:
       - python-tests
       - dependency-audit
       - semgrep
-      - terraform-security
+      - terraform-validation
+      - checkov
       - trivy-filesystem
       - helm-validation
     runs-on: ubuntu-latest
