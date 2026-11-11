@@ -43,9 +43,21 @@ spec:
   namespaceResourceWhitelist:
     - group: ""
       kind: ConfigMap
+    - group: ""
+      kind: ServiceAccount
     - group: "apps"
       kind: Deployment
     - group: ""
       kind: Service
     - group: "networking.k8s.io"
       kind: NetworkPolicy
+    - group: "autoscaling"
+      kind: HorizontalPodAutoscaler
+    - group: "gateway.networking.k8s.io"
+      kind: Gateway
+    - group: "gateway.networking.k8s.io"
+      kind: HTTPRoute
+    - group: "gateway.k8s.aws"
+      kind: LoadBalancerConfiguration
+    - group: "gateway.k8s.aws"
+      kind: TargetGroupConfiguration
