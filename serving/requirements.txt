@@ -1,0 +1,5 @@
+# Keep the API framework aligned with the Taskly application runtime.
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.0
+prometheus-client==0.26.0

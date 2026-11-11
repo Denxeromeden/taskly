@@ -38,6 +38,7 @@ were resolved on **2026-11-10** and smoke-tested on Python 3.12.
 | cloudpickle (shared ML runtime) | 3.1.2 | Resolved 2026-11-10; used by MLflow to serialize the sklearn pipeline |
 | joblib (shared ML runtime) | 1.6.0 | Resolved 2026-11-10; scikit-learn dependency |
 | threadpoolctl (shared ML runtime) | 3.8.0 | Resolved 2026-11-10; scikit-learn dependency |
+| Prometheus Python client (serving API metrics) | 0.26.0 | Latest PyPI release on 2026-11-11; Python >=3.9; used for the required Counter, Histogram and Gauge exposition |
 
 `constraints/ml-runtime.txt` is the single source for the ML runtime: the MLflow server, ml-jobs
 and serving images all install their requirements with `-c constraints/ml-runtime.txt`, so the
@@ -76,3 +77,4 @@ EKS managed add-ons use `most_recent = true` at cluster creation; capture the re
 - NumPy: https://pypi.org/project/numpy/2.5.4/
 - SciPy: https://pypi.org/project/scipy/1.18.1/
 - Python base image: https://hub.docker.com/_/python
+- Prometheus Python client: https://pypi.org/project/prometheus-client/0.26.0/
