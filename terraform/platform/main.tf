@@ -227,11 +227,11 @@ resource "helm_release" "argocd" {
   depends_on = [helm_release.platform_base]
 }
 resource "helm_release" "argocd_bootstrap" {
-  name       = "argocd-bootstrap"
-  namespace  = "argocd"
-  chart      = "${path.module}/../../deploy/charts/argocd-bootstrap"
-  wait       = true
-  atomic     = true
+  name      = "argocd-bootstrap"
+  namespace = "argocd"
+  chart     = "${path.module}/../../deploy/charts/argocd-bootstrap"
+  wait      = true
+  atomic    = true
   values = [yamlencode({
     repoURL               = var.argocd_repo_url
     targetRevision        = var.argocd_target_revision

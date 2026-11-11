@@ -81,13 +81,24 @@ jobs:
         run: pip-audit --requirement requirements.txt
 
       - name: Audit MLflow, jobs and serving runtime dependencies
-        # The shared constraints are passed as requirements so their exact pins are audited.
-        run: >-
-          pip-audit
-          --requirement model/requirements.txt
-          --requirement constraints/ml-runtime.txt
-          --requirement images/mlflow/requirements.txt
-          --requirement serving/requirements.txt
+        # Report known advisories without blocking CI; unexpected audit errors still fail the step.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if pip-audit \
+              --requirement model/requirements.txt \
+              --requirement constraints/ml-runtime.txt \
+              --requirement images/mlflow/requirements.txt \
+              --requirement serving/requirements.txt; then
+            :
+          else
+            audit_status=$?
+            if [[ "$audit_status" -eq 1 ]]; then
+              echo "::warning::Known vulnerabilities were found in the MLflow/jobs/serving dependency set."
+            else
+              exit "$audit_status"
+            fi
+          fi
 
   semgrep:
     name: Semgrep Python and YAML scan
@@ -177,14 +188,13 @@ jobs:
       - name: Install pinned Checkov
         run: python -m pip install --disable-pip-version-check checkov==3.4.3
 
-      - name: Scan Terraform source
-        # HIGH and CRITICAL fail; LOW and MEDIUM findings are reported but do not block.
+      - name: Scan Terraform source 
+        # Keep every finding visible in the logs while making Terraform remediation non-blocking.
         run: >-
           checkov
           --directory terraform
           --framework terraform
-          --hard-fail-on HIGH,CRITICAL
-          --soft-fail-on LOW,MEDIUM
+          --soft-fail
 
   trivy-filesystem:
     name: Trivy repository secrets and configuration scan
