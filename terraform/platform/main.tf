@@ -232,6 +232,11 @@ resource "helm_release" "argocd_bootstrap" {
   chart      = "${path.module}/../../deploy/charts/argocd-bootstrap"
   wait       = true
   atomic     = true
-  values     = [yamlencode({ repoURL = var.argocd_repo_url, targetRevision = var.argocd_target_revision })]
+  values = [yamlencode({
+    repoURL               = var.argocd_repo_url
+    targetRevision        = var.argocd_target_revision
+    mlflowImageRepository = local.infra.ecr_repository_urls["mlflow"]
+    mlflowRegion          = var.region
+  })]
   depends_on = [helm_release.argocd]
 }

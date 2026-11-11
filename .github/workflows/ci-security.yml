@@ -239,17 +239,23 @@ jobs:
       - name: Lint and render Argo CD Application chart
         run: |
           helm lint deploy/argocd \
-            --set-string repoURL=https://github.com/Denxeromeden/taskly \
-            --set-string targetRevision=main
+            --set-string repoURL=ci-repository-placeholder \
+            --set-string targetRevision=main \
+            --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
+            --set-string mlflowRegion=ci-region-1
           helm template ci deploy/argocd \
             --namespace argocd \
-            --set-string repoURL=https://github.com/Denxeromeden/taskly \
-            --set-string targetRevision=main >/dev/null
+            --set-string repoURL=ci-repository-placeholder \
+            --set-string targetRevision=main \
+            --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
+            --set-string mlflowRegion=ci-region-1 >/dev/null
           # Render optional child Applications too; this does not enable them in Git.
           helm template ci-enabled deploy/argocd \
             --namespace argocd \
-            --set-string repoURL=https://github.com/Denxeromeden/taskly \
+            --set-string repoURL=ci-repository-placeholder \
             --set-string targetRevision=main \
+            --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
+            --set-string mlflowRegion=ci-region-1 \
             --set applications.servingStaging.enabled=true \
             --set applications.servingProduction.enabled=true >/dev/null
 
@@ -257,8 +263,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          helm lint deploy/charts/argocd-bootstrap
-          helm template ci deploy/charts/argocd-bootstrap --namespace argocd >/dev/null
+          helm lint deploy/charts/argocd-bootstrap \
+            --set-string repoURL=ci-repository-placeholder \
+            --set-string targetRevision=main \
+            --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
+            --set-string mlflowRegion=ci-region-1
+          helm template ci deploy/charts/argocd-bootstrap --namespace argocd \
+            --set-string repoURL=ci-repository-placeholder \
+            --set-string targetRevision=main \
+            --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
+            --set-string mlflowRegion=ci-region-1 >/dev/null
 
           helm lint deploy/charts/db-bootstrap
           helm template ci deploy/charts/db-bootstrap --namespace ml-jobs >/dev/null
@@ -271,46 +285,50 @@ jobs:
 
           helm lint deploy/charts/mlflow \
             --set-string artifacts.bucket=ci-artifacts-bucket \
-            --set-string image.tag=ci
+            --set-string image.repository=ci-registry-placeholder/mlflowops/mlflow \
+            --set-string image.tag=ci \
+            --set-string region=ci-region-1
           helm template ci deploy/charts/mlflow \
             --namespace mlflow \
             --set-string artifacts.bucket=ci-artifacts-bucket \
-            --set-string image.tag=ci >/dev/null
+            --set-string image.repository=ci-registry-placeholder/mlflowops/mlflow \
+            --set-string image.tag=ci \
+            --set-string region=ci-region-1 >/dev/null
 
           helm lint deploy/charts/platform-base \
             --set-string artifactsBucket=ci-artifacts-bucket \
-            --set-string rdsMasterSecretArn=arn:aws:secretsmanager:eu-central-1:000000000000:secret:ci-placeholder
+            --set-string rdsMasterSecretArn=ci-placeholder-secret-ref
           helm template ci deploy/charts/platform-base \
             --namespace kube-system \
             --set-string artifactsBucket=ci-artifacts-bucket \
-            --set-string rdsMasterSecretArn=arn:aws:secretsmanager:eu-central-1:000000000000:secret:ci-placeholder >/dev/null
+            --set-string rdsMasterSecretArn=ci-placeholder-secret-ref >/dev/null
 
       - name: Lint and render staging serving chart
         run: |
           helm lint deploy/charts/serving \
             --values deploy/charts/serving/values-staging.yaml \
-            --set-string image.repository=000000000000.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/serving \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
             --set-string image.tag=ci
           helm template ci deploy/charts/serving \
             --namespace staging \
             --values deploy/charts/serving/values-staging.yaml \
-            --set-string image.repository=000000000000.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/serving \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
             --set-string image.tag=ci >/dev/null
 
       - name: Lint and render production serving chart
         run: |
           helm lint deploy/charts/serving \
             --values deploy/charts/serving/values-production.yaml \
-            --set-string image.repository=000000000000.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/serving \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
             --set-string image.tag=ci \
-            --set-string gateway.certificateArn=arn:aws:acm:eu-central-1:000000000000:certificate/00000000-0000-0000-0000-000000000000 \
+            --set-string gateway.certificateArn=ci-placeholder-certificate \
             --set-json networkPolicy.publicSubnetCidrs='["10.0.0.0/24"]'
           helm template ci deploy/charts/serving \
             --namespace production \
             --values deploy/charts/serving/values-production.yaml \
-            --set-string image.repository=000000000000.dkr.ecr.eu-central-1.amazonaws.com/mlflowops/serving \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
             --set-string image.tag=ci \
-            --set-string gateway.certificateArn=arn:aws:acm:eu-central-1:000000000000:certificate/00000000-0000-0000-0000-000000000000 \
+            --set-string gateway.certificateArn=ci-placeholder-certificate \
             --set-json networkPolicy.publicSubnetCidrs='["10.0.0.0/24"]' >/dev/null
 
   build-and-scan-images:
@@ -325,6 +343,9 @@ jobs:
       - trivy-filesystem
       - helm-validation
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -332,12 +353,15 @@ jobs:
           - component: mlflow
             dockerfile: images/mlflow/Dockerfile
             image: local/mlflowops-mlflow
+            ecr_repository: mlflowops/mlflow
           - component: ml-jobs
             dockerfile: images/ml-jobs/Dockerfile
             image: local/mlflowops-ml-jobs
+            ecr_repository: mlflowops/ml-jobs
           - component: serving
             dockerfile: images/serving/Dockerfile
             image: local/mlflowops-serving
+            ecr_repository: mlflowops/serving
     steps:
       - name: Check out source
         # actions/checkout v7.0.1
@@ -349,7 +373,10 @@ jobs:
         env:
           IMAGE: ${{ matrix.image }}:${{ github.sha }}
           DOCKERFILE: ${{ matrix.dockerfile }}
-        run: docker build --pull --file "$DOCKERFILE" --tag "$IMAGE" .
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          docker build --pull --file "$DOCKERFILE" --tag "$IMAGE" .
 
       - name: Scan built image
         # Trivy v0.76.2; image scans block fixable CRITICAL vulnerabilities.
@@ -363,3 +390,126 @@ jobs:
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+
+      - name: Validate publishing configuration
+        if: github.ref == 'refs/heads/main'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$AWS_REGION" ]] || { echo "Repository variable AWS_REGION is required." >&2; exit 1; }
+          [[ "$AWS_ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/.+$ ]] || {
+            echo "Repository secret AWS_ROLE_ARN must contain the existing CI role ARN." >&2
+            exit 1
+          }
+
+      - name: Configure AWS credentials for ECR push
+        if: github.ref == 'refs/heads/main'
+        # aws-actions/configure-aws-credentials v6.3.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: taskly-ecr-${{ matrix.component }}-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Push scanned image to ECR
+        if: github.ref == 'refs/heads/main'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          IMAGE: ${{ matrix.image }}:${{ github.sha }}
+          ECR_REPOSITORY: ${{ matrix.ecr_repository }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "::add-mask::$account_id"
+          echo "::add-mask::$registry"
+
+          if aws ecr describe-images \
+              --region "$AWS_REGION" \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids "imageTag=${GITHUB_SHA}" >/dev/null 2>&1; then
+            echo "Immutable image tag already exists; skipping push."
+            exit 0
+          fi
+
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$registry"
+          target_image="${registry}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+          docker tag "$IMAGE" "$target_image"
+          docker push "$target_image"
+
+  update-mlflow-image-tag:
+    name: Publish image references and commit the MLflow tag
+    if: github.ref == 'refs/heads/main'
+    needs: build-and-scan-images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    outputs:
+      mlflow_image: ${{ steps.references.outputs.mlflow_image }}
+      ml_jobs_image: ${{ steps.references.outputs.ml_jobs_image }}
+      serving_image: ${{ steps.references.outputs.serving_image }}
+    steps:
+      - name: Check out main
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure AWS credentials to resolve image references
+        # aws-actions/configure-aws-credentials v6.3.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: taskly-image-refs-${{ github.run_id }}
+
+      - name: Publish immutable image references as job outputs
+        id: references
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          [[ -n "$AWS_REGION" ]] || { echo "Repository variable AWS_REGION is required." >&2; exit 1; }
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo "Could not resolve AWS account ID." >&2; exit 1; }
+          registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "mlflow_image=${registry}/mlflowops/mlflow:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "ml_jobs_image=${registry}/mlflowops/ml-jobs:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "serving_image=${registry}/mlflowops/serving:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Update only the MLflow image tag
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected a full 40-character Git SHA image tag." >&2
+            exit 1
+          fi
+
+          if [[ "$(git rev-parse HEAD)" != "$IMAGE_TAG" ]]; then
+            echo "::error::main advanced while images were building; rerun the workflow on the latest main commit."
+            exit 1
+          fi
+
+          cat > deploy/charts/mlflow/values-image.yaml <<EOF
+          image:
+            tag: "${IMAGE_TAG}"
+          EOF
+
+          if git diff --quiet -- deploy/charts/mlflow/values-image.yaml; then
+            echo "MLflow image tag already matches this commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- deploy/charts/mlflow/values-image.yaml
+          git commit -m "chore(mlflow): update image tag to ${IMAGE_TAG}"
+          git push origin HEAD:refs/heads/main

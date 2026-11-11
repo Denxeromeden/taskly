@@ -6,16 +6,22 @@ metadata:
 spec:
   project: platform
   source:
-    repoURL: {{ .Values.repoURL | quote }}
-    targetRevision: {{ .Values.targetRevision | quote }}
+    repoURL: {{ required "repoURL is required" .Values.repoURL | quote }}
+    targetRevision: {{ required "targetRevision is required" .Values.targetRevision | quote }}
     path: deploy/argocd
     helm:
       parameters:
         - name: repoURL
-          value: {{ .Values.repoURL | quote }}
+          value: {{ required "repoURL is required" .Values.repoURL | quote }}
           forceString: true
         - name: targetRevision
-          value: {{ .Values.targetRevision | quote }}
+          value: {{ required "targetRevision is required" .Values.targetRevision | quote }}
+          forceString: true
+        - name: mlflowImageRepository
+          value: {{ required "mlflowImageRepository is required" .Values.mlflowImageRepository | quote }}
+          forceString: true
+        - name: mlflowRegion
+          value: {{ required "mlflowRegion is required" .Values.mlflowRegion | quote }}
           forceString: true
   destination:
     server: https://kubernetes.default.svc

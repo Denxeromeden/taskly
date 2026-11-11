@@ -1,5 +1,7 @@
 repoURL: ""
 targetRevision: ""
+mlflowImageRepository: ""
+mlflowRegion: ""
 
 applications:
   servingStaging:

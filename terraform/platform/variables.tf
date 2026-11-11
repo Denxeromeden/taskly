@@ -1,6 +1,11 @@
 variable "region" {
-  type    = string
-  default = "eu-central-1"
+  type        = string
+  description = "AWS region used by the existing infra stack; set from its Terraform output in local terraform.tfvars."
+  nullable    = false
+  validation {
+    condition     = length(trimspace(var.region)) > 0
+    error_message = "region must match the region used by the infra stack."
+  }
 }
 variable "project" {
   type    = string
@@ -16,8 +21,13 @@ variable "state_bucket" {
   default     = ""
 }
 variable "argocd_repo_url" {
-  type    = string
-  default = "https://github.com/Denxeromeden/taskly"
+  type        = string
+  description = "Git repository URL consumed by Argo CD; set in the local, gitignored terraform.tfvars."
+  nullable    = false
+  validation {
+    condition     = length(trimspace(var.argocd_repo_url)) > 0
+    error_message = "argocd_repo_url must be set to the Git repository Argo CD should track."
+  }
 }
 variable "argocd_target_revision" {
   type    = string

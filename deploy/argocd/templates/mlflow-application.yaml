@@ -13,6 +13,15 @@ spec:
     path: deploy/charts/mlflow
     helm:
       releaseName: mlflow
+      valueFiles:
+        - values-image.yaml
+      parameters:
+        - name: image.repository
+          value: {{ required "mlflowImageRepository is required" .Values.mlflowImageRepository | quote }}
+          forceString: true
+        - name: region
+          value: {{ required "mlflowRegion is required" .Values.mlflowRegion | quote }}
+          forceString: true
   destination:
     server: https://kubernetes.default.svc
     namespace: mlflow

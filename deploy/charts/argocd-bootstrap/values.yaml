@@ -1,2 +1,4 @@
-repoURL: https://github.com/Denxeromeden/taskly
-targetRevision: main
+repoURL: ""
+targetRevision: ""
+mlflowImageRepository: ""
+mlflowRegion: ""

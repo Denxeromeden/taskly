@@ -34,7 +34,7 @@ spec:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       containers:
         - name: mlflow
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: '{{ required "image.repository is required" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}'
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -52,7 +52,7 @@ spec:
             - name: MLFLOW_PORT
               value: {{ .Values.server.port | quote }}
             - name: AWS_REGION
-              value: {{ .Values.region | quote }}
+              value: {{ required "region is required" .Values.region | quote }}
           readinessProbe:
             httpGet:
               path: /health

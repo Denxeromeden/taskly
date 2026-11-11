@@ -1,7 +1,6 @@
 image:
-  repository: mlflowops/mlflow
-  # Leave empty to use appVersion; deployments must override this with an
-  # immutable Git-SHA tag.
+  # Supplied to Argo CD by the platform Terraform stack; the Git values file stores only the tag.
+  repository: ""
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -18,7 +17,7 @@ artifacts:
   bucket: ""
   prefix: mlflow
 
-region: eu-central-1
+region: ""
 
 server:
   port: 5000
