@@ -1,7 +1,8 @@
 # Keep the API framework aligned with the Taskly application runtime.
-fastapi==0.111.0
+fastapi==0.162.4
+starlette==1.7.0
 uvicorn[standard]==0.29.0
-pydantic==2.7.0
+pydantic==2.14.3
 prometheus-client==0.26.0
 
 # Resolve registry aliases and deserialize the registered scikit-learn pipeline.

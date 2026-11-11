@@ -111,7 +111,7 @@ jobs:
       - name: Scan Python and YAML files
         run: >-
           semgrep scan
-          --config auto
+          --config p/default
           --severity ERROR
           --error
           --metrics=off
@@ -498,10 +498,10 @@ jobs:
             exit 1
           fi
 
-          cat > deploy/charts/mlflow/values-image.yaml <<EOF
+          cat > deploy/charts/mlflow/values-image.yaml <<EOF_IMAGE
           image:
             tag: "${IMAGE_TAG}"
-          EOF
+          EOF_IMAGE
 
           if git diff --quiet -- deploy/charts/mlflow/values-image.yaml; then
             echo "MLflow image tag already matches this commit."

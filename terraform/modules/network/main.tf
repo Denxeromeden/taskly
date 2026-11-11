@@ -110,8 +110,7 @@ resource "aws_route_table" "database" {
 resource "aws_route_table_association" "database" {
   count          = 2
   subnet_id      = aws_subnet.database[count.index].id
-  route_table_id = aws_route_table.database  route_table_id = aws_route_table.database.id
-.id
+  route_table_id = aws_route_table.database[count.index].id
 }
 
 resource "aws_vpc_endpoint" "s3" {

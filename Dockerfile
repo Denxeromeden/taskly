@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py database.py models.py cache.py .
+COPY main.py database.py models.py cache.py ./
 
 # Run as non-root — pairs with the Kubernetes PodSecurityContext
 # (runAsNonRoot, readOnlyRootFilesystem) production deployments are

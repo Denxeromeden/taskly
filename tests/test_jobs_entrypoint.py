@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from sqlalchemy.engine import make_url
 
 from jobs.entrypoint import build_database_url, run_training
@@ -63,7 +65,7 @@ def test_run_training_passes_runtime_url_without_logging_it(monkeypatch):
     command, check, cwd, environment = calls[0]
     assert command[-1].endswith("/model/train.py")
     assert check is True
-    assert cwd.name == "taskly-main"
+    assert cwd == Path(__file__).resolve().parents[1]
     assert environment["MLFLOW_TRACKING_URI"] == BASE_ENVIRONMENT["MLFLOW_TRACKING_URI"]
     assert "sslmode=require" in environment["DATABASE_URL"]
     assert BASE_ENVIRONMENT["TASKS_DB_PASSWORD"] not in environment["DATABASE_URL"]
