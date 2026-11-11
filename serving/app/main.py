@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import asynccontextmanager
+import threading
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Literal, Protocol
@@ -18,6 +20,8 @@ from prometheus_client import (
     Histogram,
     generate_latest,
 )
+
+from .model_registry import load_registered_model
 
 PRIORITIES = frozenset({"low", "medium", "high"})
 UNLOADED_MODEL_VERSION = "unloaded"
@@ -97,9 +101,57 @@ def set_loaded_model(app: FastAPI, model: Predictor, model_version: str) -> None
     if previous_version:
         metrics.model_info.labels(model_version=str(previous_version)).set(0)
 
+    metrics.model_info.labels(model_version=version).set(1)
     app.state.model = model
     app.state.model_version = version
-    metrics.model_info.labels(model_version=version).set(1)
+    app.state.loaded_model = (model, version)
+
+
+def _load_model_in_background(app: FastAPI) -> None:
+    """Load the registry model without blocking liveness endpoints."""
+    try:
+        model, model_version = load_registered_model()
+        if app.state.shutting_down:
+            return
+        set_loaded_model(app, model, model_version)
+        logger.info(
+            json.dumps(
+                {"event": "model_loaded", "model_version": str(model_version)},
+                separators=(",", ":"),
+            )
+        )
+    except Exception as exc:
+        logger.error(
+            json.dumps(
+                {
+                    "event": "model_load_failed",
+                    "model_version": UNLOADED_MODEL_VERSION,
+                    "error_type": type(exc).__name__,
+                },
+                separators=(",", ":"),
+            )
+        )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start registry loading while keeping the API process responsive."""
+    app.state.shutting_down = False
+    loader_thread = None
+    if app.state.loaded_model is None:
+        loader_thread = threading.Thread(
+            target=_load_model_in_background,
+            args=(app,),
+            name="taskly-model-loader",
+            daemon=True,
+        )
+        app.state.model_loader_thread = loader_thread
+        loader_thread.start()
+
+    try:
+        yield
+    finally:
+        app.state.shutting_down = True
 
 
 def create_app(
@@ -107,9 +159,10 @@ def create_app(
     model_version: str | None = None,
 ) -> FastAPI:
     """Create the API; model loading is supplied by the startup layer."""
-    app = FastAPI(title="Taskly Priority Serving API")
+    app = FastAPI(title="Taskly Priority Serving API", lifespan=lifespan)
     app.state.model = None
     app.state.model_version = None
+    app.state.loaded_model = None
     app.state.metrics = _create_metrics()
 
     if model is not None:
@@ -122,7 +175,9 @@ def create_app(
         if request.method != "POST" or request.url.path != "/predict":
             return await call_next(request)
 
-        version = request.app.state.model_version or UNLOADED_MODEL_VERSION
+        loaded_model = request.app.state.loaded_model
+        request.state.loaded_model = loaded_model
+        version = loaded_model[1] if loaded_model is not None else UNLOADED_MODEL_VERSION
         started = perf_counter()
         outcome = "error"
         try:
@@ -137,10 +192,10 @@ def create_app(
 
     @app.post("/predict", response_model=PredictionResponse)
     def predict(payload: PredictionRequest, request: Request) -> PredictionResponse:
-        predictor: Predictor | None = request.app.state.model
-        model_version = request.app.state.model_version
-        if predictor is None or model_version is None:
+        loaded_model = request.state.loaded_model
+        if loaded_model is None:
             raise HTTPException(status_code=503, detail="Model is not ready")
+        predictor, model_version = loaded_model
 
         model_input = payload.title + " " + payload.description
         try:
@@ -177,7 +232,7 @@ def create_app(
 
     @app.get("/ready")
     async def readiness(request: Request) -> dict[str, str]:
-        if request.app.state.model is None or request.app.state.model_version is None:
+        if request.app.state.loaded_model is None:
             raise HTTPException(status_code=503, detail="Model is not ready")
         return {"status": "ready"}
 
