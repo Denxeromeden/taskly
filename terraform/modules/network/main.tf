@@ -110,7 +110,8 @@ resource "aws_route_table" "database" {
 resource "aws_route_table_association" "database" {
   count          = 2
   subnet_id      = aws_subnet.database[count.index].id
-  route_table_id = aws_route_table.database[count.index].id
+  route_table_id = aws_route_table.database  route_table_id = aws_route_table.database.id
+.id
 }
 
 resource "aws_vpc_endpoint" "s3" {
@@ -127,3 +128,4 @@ output "private_subnet_ids" { value = aws_subnet.private[*].id }
 output "database_subnet_ids" { value = aws_subnet.database[*].id }
 output "private_subnet_cidrs" { value = local.private_cidrs }
 output "database_subnet_group_name" { value = "${var.name}-database" }
+output "public_subnet_cidrs" { value = aws_subnet.public[*].cidr_block }

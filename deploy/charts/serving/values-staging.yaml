@@ -9,3 +9,6 @@ autoscaling:
 
 gateway:
   enabled: false
+
+networkPolicy:
+  allowMonitoring: false

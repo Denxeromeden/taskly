@@ -1,0 +1,65 @@
+{{- if eq .Values.namespace "production" }}
+{{- $cidrs := required "networkPolicy.publicSubnetCidrs must be set from the infra Terraform public_subnet_cidrs output for production" .Values.networkPolicy.publicSubnetCidrs }}
+{{- if or (has "0.0.0.0/0" $cidrs) (has "::/0" $cidrs) }}
+{{- fail "networkPolicy.publicSubnetCidrs must contain only the ALB public-subnet CIDRs; an all-address CIDR is not allowed" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: serving-api-ingress
+  namespace: {{ .Values.namespace | quote }}
+  labels:
+    app.kubernetes.io/name: serving-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: serving-api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range $cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    {{- if .Values.networkPolicy.allowMonitoring }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    {{- end }}
+{{- else if and (eq .Values.namespace "staging") .Values.networkPolicy.allowMonitoring }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: serving-api-monitoring-ingress
+  namespace: {{ .Values.namespace | quote }}
+  labels:
+    app.kubernetes.io/name: serving-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: serving-api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+{{- else if ne .Values.namespace "staging" }}
+{{- fail "serving chart namespace must be staging or production" }}
+{{- end }}

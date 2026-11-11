@@ -8,6 +8,7 @@ output "vpc_id" { value = module.network.vpc_id }
 output "public_subnet_ids" { value = module.network.public_subnet_ids }
 output "private_subnet_ids" { value = module.network.private_subnet_ids }
 output "database_subnet_ids" { value = module.network.database_subnet_ids }
+output "public_subnet_cidrs" { value = module.network.public_subnet_cidrs }
 output "node_security_group_id" { value = module.eks.node_security_group_id }
 output "karpenter_controller_role_arn" { value = module.eks.karpenter_controller_role_arn }
 output "karpenter_node_role_name" { value = module.eks.karpenter_node_role_name }

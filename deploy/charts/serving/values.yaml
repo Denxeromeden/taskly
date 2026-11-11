@@ -64,3 +64,10 @@ gateway:
   enabled: false
   # Supply the ACM certificate ARN from the platform Terraform output.
   certificateArn: ""
+
+networkPolicy:
+  # Populate from `terraform -chdir=terraform/infra output -json public_subnet_cidrs`.
+  # These must be the ALB public-subnet CIDRs, not the ALB's client source ranges.
+  publicSubnetCidrs: []
+  # Enable only after the Day 3 monitoring workloads are deployed.
+  allowMonitoring: false
