@@ -1,3 +1,4 @@
+from jobs import drift
 from jobs.drift import (
     FEATURE_COLUMNS,
     METRIC_NAMES,
@@ -67,13 +68,49 @@ def test_pushgateway_payload_has_stable_metric_set_and_no_dynamic_labels():
 def test_previous_pushgateway_metrics_are_parsed_and_preserved():
     parsed = parse_existing_metrics(
         "# TYPE taskly_drift_last_success_timestamp_seconds gauge\n"
-        "taskly_drift_last_success_timestamp_seconds 123.5\n"
+        'taskly_drift_last_success_timestamp_seconds{job="taskly-drift-detection"} 123.5\n'
         'taskly_drift_detected{job="taskly-drift-detection"} 1\n'
+        'taskly_drift_detected{job="another-job"} 99\n'
     )
 
     assert parsed["taskly_drift_last_success_timestamp_seconds"] == 123.5
     assert parsed["taskly_drift_detected"] == 1.0
     assert RUN_STATUS_SKIPPED_INSUFFICIENT_DATA == 1
+
+
+def test_previous_metrics_use_pushgateway_scrape_endpoint(monkeypatch):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return (
+                b'# TYPE taskly_drift_last_success_timestamp_seconds gauge\n'
+                b'taskly_drift_last_success_timestamp_seconds{job="taskly-drift-detection"} 123.5\n'
+            )
+
+    request_details = {}
+
+    def fake_urlopen(request, timeout):
+        request_details["url"] = request.full_url
+        request_details["method"] = request.get_method()
+        request_details["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(drift, "urlopen", fake_urlopen)
+    parsed = drift._read_previous_metrics("http://monitoring-pushgateway:9091/")
+
+    assert request_details == {
+        "url": "http://monitoring-pushgateway:9091/metrics",
+        "method": "GET",
+        "timeout": 5,
+    }
+    assert parsed["taskly_drift_last_success_timestamp_seconds"] == 123.5
 
 
 def test_windows_are_empty_when_not_enough_data():

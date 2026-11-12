@@ -110,10 +110,13 @@ def parse_existing_metrics(payload: str) -> dict[str, float]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        match = re.match(r"^(taskly_drift_[a-z_]+)(?:\{[^}]*\})?\s+([-+0-9.eE]+)$", line)
+        match = re.match(r"^(taskly_drift_[a-z_]+)(?:\{([^}]*)\})?\s+([-+0-9.eE]+)$", line)
         if match:
+            labels = match.group(2) or ""
+            if not re.search(r'(?:^|,)\s*job="taskly-drift-detection"(?:,|$)', labels):
+                continue
             try:
-                values[match.group(1)] = float(match.group(2))
+                values[match.group(1)] = float(match.group(3))
             except ValueError:
                 continue
     return values
@@ -152,7 +155,9 @@ def _push_metrics(pushgateway_url: str, values: Mapping[str, float]) -> None:
 
 
 def _read_previous_metrics(pushgateway_url: str) -> dict[str, float]:
-    url = pushgateway_url.rstrip("/") + "/metrics/job/taskly-drift-detection"
+    # Pushgateway exposes pushed metrics for scraping at /metrics. Its
+    # /metrics/job/<group> endpoint is for PUT/POST/DELETE, not GET.
+    url = pushgateway_url.rstrip("/") + "/metrics"
     try:
         with urlopen(Request(url, method="GET"), timeout=5) as response:
             return parse_existing_metrics(response.read().decode("utf-8"))
