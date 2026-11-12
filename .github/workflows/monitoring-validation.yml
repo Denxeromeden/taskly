@@ -32,7 +32,7 @@ jobs:
         uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e
         with:
           version: v3.22.1
-          
+
       - name: Configure Helm repositories
         run: |
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -97,7 +97,7 @@ jobs:
             --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
             --set-string image.tag=ci > /tmp/serving-staging-rendered.yaml
           grep -q 'kind: ServiceMonitor' /tmp/serving-staging-rendered.yaml
-          grep -q 'interval: 30s' /tmp/serving-staging-rendered.yaml
+          grep -Eq '^[[:space:]]+interval: "?30s"?$' /tmp/serving-staging-rendered.yaml
           grep -q 'path: /metrics' /tmp/serving-staging-rendered.yaml
 
           helm lint deploy/charts/serving \
