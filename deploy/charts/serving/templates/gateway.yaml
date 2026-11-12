@@ -9,6 +9,9 @@ metadata:
   namespace: {{ .Values.namespace | quote }}
 spec:
   gatewayClassName: aws-alb
+  # The HTTPS certificate is supplied as an ACM ARN through the attached
+  # LoadBalancerConfiguration. Do not add a Kubernetes TLS Secret or private
+  # key for this listener.
   infrastructure:
     parametersRef:
       group: gateway.k8s.aws

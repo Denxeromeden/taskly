@@ -32,8 +32,12 @@ spec:
         - name: certificateArn
           value: {{ required "certificateArn is required" .Values.certificateArn | quote }}
           forceString: true
-        - name: publicSubnetCidrs
-          value: {{ required "publicSubnetCidrs is required" (join "," .Values.publicSubnetCidrs) | quote }}
+{{- /* Emit one indexed Helm parameter per subnet CIDR so the value remains a YAML list. */ -}}
+{{- range $index, $cidr := .Values.publicSubnetCidrs }}
+        - name: publicSubnetCidrs[{{ $index }}]
+          value: {{ $cidr | quote }}
+          forceString: true
+{{- end }}
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

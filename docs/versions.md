@@ -43,6 +43,7 @@ chart was installed in this execution environment. Workload-layer pins were reso
 | Starlette (Taskly API and serving) | 1.7.0 | Matches the Starlette version in FastAPI 0.162.4's upstream lock; newer than every Starlette fix version listed by pip-audit on 2026-11-11 |
 | Pydantic (Taskly API and serving) | 2.14.3 | Matches the Pydantic version in FastAPI 0.162.4's upstream lock |
 | Prometheus Python client (serving API metrics) | 0.26.0 | Latest PyPI release on 2026-11-11; Python >=3.9; used for the required Counter, Histogram and Gauge exposition |
+| PyYAML (production Gateway contract validator and tests) | 6.0.3 | Latest PyPI release checked 2026-11-12; supports Python >=3.8 |
 
 `constraints/ml-runtime.txt` is the single source for the ML runtime: the MLflow server, ml-jobs
 and serving images all install their requirements with `-c constraints/ml-runtime.txt`, so the
@@ -90,3 +91,4 @@ EKS managed add-ons use `most_recent = true` at cluster creation; capture the re
 - SciPy: https://pypi.org/project/scipy/1.18.1/
 - Python base image: https://hub.docker.com/_/python
 - Prometheus Python client: https://pypi.org/project/prometheus-client/0.26.0/
+- PyYAML: https://pypi.org/project/PyYAML/6.0.3/

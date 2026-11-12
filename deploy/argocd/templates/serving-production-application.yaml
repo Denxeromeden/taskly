@@ -1,4 +1,7 @@
 {{- if .Values.applications.servingProduction.enabled }}
+{{- if not .Values.publicSubnetCidrs }}
+{{- fail "publicSubnetCidrs must be populated from the infra Terraform public_subnet_cidrs output before enabling production serving" }}
+{{- end }}
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -22,8 +25,12 @@ spec:
         - name: gateway.certificateArn
           value: {{ required "certificateArn is required" .Values.certificateArn | quote }}
           forceString: true
-        - name: networkPolicy.publicSubnetCidrs
-          value: {{ required "publicSubnetCidrs is required" (join "," .Values.publicSubnetCidrs) | quote }}
+{{- /* Preserve the Terraform CIDRs as individual Helm list elements. */ -}}
+{{- range $index, $cidr := .Values.publicSubnetCidrs }}
+        - name: networkPolicy.publicSubnetCidrs[{{ $index }}]
+          value: {{ $cidr | quote }}
+          forceString: true
+{{- end }}
   destination:
     server: https://kubernetes.default.svc
     namespace: production

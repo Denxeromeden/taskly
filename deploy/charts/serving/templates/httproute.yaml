@@ -1,4 +1,6 @@
 {{- if .Values.gateway.enabled }}
+{{- /* This is the only public application route. Do not add /health, /ready,
+       /metrics, /docs, /openapi.json, / or a catch-all match here. */ -}}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -17,7 +19,9 @@ spec:
             type: Exact
             value: /predict
       backendRefs:
-        - kind: Service
+        - group: ""
+          kind: Service
           name: serving-api
           port: 8000
+          weight: 1
 {{- end }}

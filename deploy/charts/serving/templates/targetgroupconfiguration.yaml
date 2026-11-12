@@ -1,4 +1,6 @@
 {{- if .Values.gateway.enabled }}
+{{- /* The ALB is an L7 proxy, so pod ingress originates from ALB nodes in the
+       public subnets. The serving NetworkPolicy allows only those CIDRs. */ -}}
 apiVersion: gateway.k8s.aws/v1
 kind: TargetGroupConfiguration
 metadata:
@@ -6,6 +8,7 @@ metadata:
   namespace: {{ .Values.namespace | quote }}
 spec:
   targetReference:
+    group: ""
     kind: Service
     name: serving-api
   defaultConfiguration:

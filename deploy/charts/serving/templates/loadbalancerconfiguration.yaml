@@ -6,6 +6,9 @@ metadata:
   namespace: {{ .Values.namespace | quote }}
 spec:
   scheme: internet-facing
+  # Public ALB client ingress is intentionally open, per the foundation
+  # contract. Pod ingress is separately restricted to the ALB public-subnet
+  # CIDRs by the serving NetworkPolicy; do not widen that pod policy.
   sourceRanges:
     - 0.0.0.0/0
   listenerConfigurations:
