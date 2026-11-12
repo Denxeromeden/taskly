@@ -17,6 +17,18 @@ locals {
   certificate_arn     = var.acm_certificate_arn != null ? var.acm_certificate_arn : aws_acm_certificate.self_signed[0].arn
   gateway_api_version = "v1.6.0"
   aws_lbc_version     = "3.6.2"
+
+  platform_base_chart_path = "${path.module}/../../deploy/charts/platform-base"
+  # The Helm provider does not detect edits to files inside a local chart path.
+  # Feed a content hash as a no-op chart value so Terraform plans an in-place upgrade.
+  platform_base_chart_files = sort(distinct(concat(
+    fileset(local.platform_base_chart_path, "*"),
+    fileset(local.platform_base_chart_path, "**/*")
+  )))
+  platform_base_chart_checksum = sha256(join("\n", [
+    for file in local.platform_base_chart_files :
+    "${file}:${filesha256("${local.platform_base_chart_path}/${file}")}"
+  ]))
 }
 
 # Install the Gateway API standard CRDs and the AWS Load Balancer Controller's
@@ -187,15 +199,16 @@ resource "helm_release" "metrics_server" {
 resource "helm_release" "platform_base" {
   name      = "platform-base"
   namespace = "default"
-  chart     = "${path.module}/../../deploy/charts/platform-base"
+  chart     = local.platform_base_chart_path
   wait      = true
   atomic    = true
   values = [yamlencode({
-    region              = var.region
-    artifactsBucket     = local.infra.artifacts_bucket_name
-    rdsMasterSecretArn  = local.infra.rds_master_secret_arn
-    rdsMlflowSecretName = "mlflowops/rds/mlflow"
-    rdsTasksSecretName  = "mlflowops/rds/tasks"
+    region                  = var.region
+    artifactsBucket         = local.infra.artifacts_bucket_name
+    rdsMasterSecretArn      = local.infra.rds_master_secret_arn
+    rdsMlflowSecretName     = "mlflowops/rds/mlflow"
+    rdsTasksSecretName      = "mlflowops/rds/tasks"
+    terraformChartChecksum = local.platform_base_chart_checksum
   })]
   depends_on = [helm_release.external_secrets, helm_release.load_balancer_controller]
 }

@@ -3,3 +3,5 @@ artifactsBucket: ""
 rdsMasterSecretArn: ""
 rdsMlflowSecretName: mlflowops/rds/mlflow
 rdsTasksSecretName: mlflowops/rds/tasks
+# Set by Terraform so local chart file changes trigger a Helm release upgrade.
+terraformChartChecksum: ""
