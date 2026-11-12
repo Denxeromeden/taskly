@@ -1,0 +1,64 @@
+workload_contract_version: 1
+foundation_contract: docs/foundation-contract.yaml
+model:
+  experiment: task-priority-classifier
+  registered_name: task-priority-classifier
+  input: [title, description]
+  output_classes: [low, medium, high]
+  promotion_metric: f1_macro
+  promotion_rule: candidate_greater_than_or_equal_to_production
+  aliases: [staging, production]
+  training_script: model/train.py
+  training_script_mutable: false
+mlflow:
+  namespace: mlflow
+  service: mlflow
+  port: 5000
+  tracking_uri: http://mlflow.mlflow.svc.cluster.local:5000
+  backend_database: mlflow
+  backend_user: mlflow_app
+  backend_secret: mlflow-db-credentials
+  artifacts_mode: proxied
+  artifacts_destination: "s3://<artifacts_bucket>/mlflow/"
+  aws_service_account: mlflow
+jobs:
+  namespace: ml-jobs
+  image_repository: mlflowops/ml-jobs
+  database: tasks
+  database_user: tasks_app
+  database_secret: tasks-db-credentials
+  tracking_uri: http://mlflow.mlflow.svc.cluster.local:5000
+  service_accounts_without_aws_identity: [seed, add-data, training]
+  training_node_selector: {workload: training}
+  training_toleration: "workload=training:NoSchedule"
+serving:
+  image_repository: mlflowops/serving
+  container_port: 8000
+  endpoint: POST /predict
+  health: GET /health
+  readiness: GET /ready
+  metrics: GET /metrics
+  model_loaded_at: startup
+  staging:
+    namespace: staging
+    service: serving-api
+    alias: staging
+    public_gateway: false
+  production:
+    namespace: production
+    service: serving-api
+    alias: production
+    public_gateway: true
+    gateway_class: aws-alb
+    gateway: serving-public
+    http_route: serving-public
+    route_match: {method: POST, path_type: Exact, path: /predict}
+    backend: {service: serving-api, port: 8000}
+    load_balancer_configuration: serving-public-lb
+    target_group_configuration: serving-api-targets
+ci:
+  workflow_role: foundation_contract.ci.github_oidc_role_arn
+  kubernetes_group: "mlflowops:deployers"
+  image_tag: full_git_sha
+  training_concurrency_group: taskly-mlflow-training
+  production_alias_change_requires_approval: true
