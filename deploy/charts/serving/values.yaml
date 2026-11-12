@@ -71,5 +71,5 @@ networkPolicy:
   publicSubnetCidrs: []
   # Allow only the labelled staging-smoke Job in ml-jobs to reach staging.
   allowStagingSmoke: true
-  # Enable only after the Day 3 monitoring workloads are deployed.
+  # Enable only after the monitoring workloads are deployed.
   allowMonitoring: false

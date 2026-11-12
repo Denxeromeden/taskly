@@ -501,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Validate a rendered production serving chart against the "
-            "Day 3 public-route contract."
+            " public-route contract."
         )
     )
     parser.add_argument(

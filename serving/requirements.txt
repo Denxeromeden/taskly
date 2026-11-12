@@ -9,3 +9,6 @@ prometheus-client==0.26.0
 # Exact ML runtime versions are supplied by constraints/ml-runtime.txt.
 mlflow-skinny>=2.10,<3
 scikit-learn>=1.3
+
+# MLflow's pyfunc loader imports pandas when loading a registered model.
+pandas==2.3.3
