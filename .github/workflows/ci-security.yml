@@ -253,6 +253,7 @@ jobs:
             --set-string targetRevision=main \
             --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
             --set-string mlflowRegion=ci-region-1 \
+            --set-string mlflowArtifactsBucket=ci-artifacts-placeholder \
             --set-string servingImageRepository=ci-registry-placeholder/mlflowops/serving \
             --set-string certificateArn=ci-placeholder-certificate \
             --set-json 'publicSubnetCidrs=["10.0.0.0/24"]'
@@ -262,6 +263,7 @@ jobs:
             --set-string targetRevision=main \
             --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
             --set-string mlflowRegion=ci-region-1 \
+            --set-string mlflowArtifactsBucket=ci-artifacts-placeholder \
             --set-string servingImageRepository=ci-registry-placeholder/mlflowops/serving \
             --set-string certificateArn=ci-placeholder-certificate \
             --set-json 'publicSubnetCidrs=["10.0.0.0/24"]' >/dev/null
@@ -272,6 +274,7 @@ jobs:
             --set-string targetRevision=main \
             --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
             --set-string mlflowRegion=ci-region-1 \
+            --set-string mlflowArtifactsBucket=ci-artifacts-placeholder \
             --set-string servingImageRepository=ci-registry-placeholder/mlflowops/serving \
             --set-string certificateArn=ci-placeholder-certificate \
             --set-json 'publicSubnetCidrs=["10.0.0.0/24"]' \
@@ -287,6 +290,7 @@ jobs:
             --set-string targetRevision=main \
             --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
             --set-string mlflowRegion=ci-region-1 \
+            --set-string mlflowArtifactsBucket=ci-artifacts-placeholder \
             --set-string servingImageRepository=ci-registry-placeholder/mlflowops/serving \
             --set-string certificateArn=ci-placeholder-certificate \
             --set-json 'publicSubnetCidrs=["10.0.0.0/24"]'
@@ -295,6 +299,7 @@ jobs:
             --set-string targetRevision=main \
             --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
             --set-string mlflowRegion=ci-region-1 \
+            --set-string mlflowArtifactsBucket=ci-artifacts-placeholder \
             --set-string servingImageRepository=ci-registry-placeholder/mlflowops/serving \
             --set-string certificateArn=ci-placeholder-certificate \
             --set-json 'publicSubnetCidrs=["10.0.0.0/24"]' >/dev/null
@@ -305,8 +310,18 @@ jobs:
           helm lint deploy/charts/karpenter-config
           helm template ci deploy/charts/karpenter-config --namespace kube-system >/dev/null
 
-          helm lint deploy/charts/ml-jobs
-          helm template ci deploy/charts/ml-jobs --namespace ml-jobs >/dev/null
+          helm lint deploy/charts/ml-jobs \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/ml-jobs \
+            --set-string image.tag=ci \
+            --set-string artifactsBucket=ci-artifacts-placeholder \
+            --set-string region=ci-region-1
+
+          helm template ci deploy/charts/ml-jobs \
+            --namespace ml-jobs \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/ml-jobs \
+            --set-string image.tag=ci \
+            --set-string artifactsBucket=ci-artifacts-placeholder \
+            --set-string region=ci-region-1 >/dev/null
 
           helm lint deploy/charts/mlflow \
             --set-string artifacts.bucket=ci-artifacts-bucket \
