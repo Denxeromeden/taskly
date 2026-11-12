@@ -188,3 +188,19 @@ dataset file to keep in sync with the app.
 If you run `train.py` before any labeled tasks exist, it fails fast with a clear error telling
 you to run `generate_data.py` or create tasks with a `priority` first, rather than crashing
 deep inside pandas/scikit-learn.
+
+## MLOps on EKS
+
+The EKS/MLflow workload is operated separately from the local Docker Compose development path above. It uses the existing AWS infrastructure, MLflow tracking server, PostgreSQL databases, S3 artifact bucket, ECR repositories and Argo CD applications. See [`docs/workload-contract.yaml`](docs/workload-contract.yaml) for the workload interfaces and [`docs/runbooks/mlops-day2.md`](docs/runbooks/mlops-day2.md) for the operator procedure and acceptance checklist.
+
+### Trigger a retraining run
+
+1. In GitHub Actions, manually run `CI security` on the `main` branch. Wait for all validation gates, all three image builds/scans, ECR publication and the `update-mlflow-image-tag` job to finish. The workflow commits the immutable Git-SHA tag to `deploy/charts/mlflow/values-image.yaml`.
+2. Manually run `ML jobs` on `main` and select `operation: train`. The workflow creates a Spot-only training Job, waits for completion, creates a promotion Job and updates `@staging` only when the candidate is accepted. The workflow is serialized to prevent overlapping training/promotion runs.
+3. Once the first successful promotion has created `@staging`, enable the `serving-staging` Argo CD Application and verify the staging API. Accepted later promotions restart the staging Deployment; rejected candidates do not.
+
+The `ML jobs` workflow also supports `seed` (insert starter data only when no labeled rows exist) and `add-data` (append a normal or drifted synthetic batch). See the runbook for their inputs and details.
+
+### Production promotion status
+
+The Day 2 workflow does not change `@production`, enable the production Argo CD Application or create a public ALB. Production promotion requires the separate Day 3 protected-approval workflow; do not promote by manually changing the alias. The production Helm values and Gateway API templates are prepared, but remain inactive until that workflow and approval controls are implemented.

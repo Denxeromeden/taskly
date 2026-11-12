@@ -233,11 +233,14 @@ resource "helm_release" "argocd_bootstrap" {
   wait      = true
   atomic    = true
   values = [yamlencode({
-    repoURL               = var.argocd_repo_url
-    targetRevision        = var.argocd_target_revision
-    mlflowImageRepository = local.infra.ecr_repository_urls["mlflow"]
-    mlflowRegion          = var.region
-    mlflowArtifactsBucket = local.infra.artifacts_bucket_name
+    repoURL                = var.argocd_repo_url
+    targetRevision         = var.argocd_target_revision
+    mlflowImageRepository  = local.infra.ecr_repository_urls["mlflow"]
+    mlflowRegion           = var.region
+    mlflowArtifactsBucket  = local.infra.artifacts_bucket_name
+    servingImageRepository = local.infra.ecr_repository_urls["serving"]
+    certificateArn         = local.certificate_arn
+    publicSubnetCidrs      = local.infra.public_subnet_cidrs
   })]
   depends_on = [helm_release.argocd]
 }

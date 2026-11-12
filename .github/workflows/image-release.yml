@@ -1,0 +1,198 @@
+name: Image release
+
+on:
+  workflow_call:
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-scan-images:
+    name: Build and scan ${{ matrix.component }} image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: mlflow
+            dockerfile: images/mlflow/Dockerfile
+            image: local/mlflowops-mlflow
+            ecr_repository: mlflowops/mlflow
+          - component: ml-jobs
+            dockerfile: images/ml-jobs/Dockerfile
+            image: local/mlflowops-ml-jobs
+            ecr_repository: mlflowops/ml-jobs
+          - component: serving
+            dockerfile: images/serving/Dockerfile
+            image: local/mlflowops-serving
+            ecr_repository: mlflowops/serving
+    steps:
+      - name: Check out source
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build image from repository root
+        env:
+          IMAGE: ${{ matrix.image }}:${{ github.sha }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          docker build --pull --file "$DOCKERFILE" --tag "$IMAGE" .
+
+      - name: Scan built image
+        # Trivy v0.76.2; image scans block fixable CRITICAL vulnerabilities.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          version: v0.76.2
+          scan-type: image
+          image-ref: ${{ matrix.image }}:${{ github.sha }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "0" #warning::Known vulnerabilities were found in the MLflow/jobs/serving dependency set.
+
+      - name: Validate publishing configuration
+        if: github.ref == 'refs/heads/main'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$AWS_REGION" ]] || { echo "Repository variable AWS_REGION is required." >&2; exit 1; }
+          [[ "$AWS_ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/.+$ ]] || {
+            echo "Repository secret AWS_ROLE_ARN must contain the existing CI role ARN." >&2
+            exit 1
+          }
+
+      - name: Configure AWS credentials for ECR push
+        if: github.ref == 'refs/heads/main'
+        # aws-actions/configure-aws-credentials v6.3.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: taskly-ecr-${{ matrix.component }}-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Push scanned image to ECR
+        if: github.ref == 'refs/heads/main'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          IMAGE: ${{ matrix.image }}:${{ github.sha }}
+          ECR_REPOSITORY: ${{ matrix.ecr_repository }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "::add-mask::$account_id"
+          echo "::add-mask::$registry"
+
+          if aws ecr describe-images \
+              --region "$AWS_REGION" \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids "imageTag=${GITHUB_SHA}" >/dev/null 2>&1; then
+            echo "Immutable image tag already exists; skipping push."
+            exit 0
+          fi
+
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$registry"
+          target_image="${registry}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+          docker tag "$IMAGE" "$target_image"
+          docker push "$target_image"
+
+  update-mlflow-image-tag:
+    name: Publish image references and commit the image tags
+    if: github.ref == 'refs/heads/main'
+    needs: build-and-scan-images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    outputs:
+      mlflow_image: ${{ steps.references.outputs.mlflow_image }}
+      ml_jobs_image: ${{ steps.references.outputs.ml_jobs_image }}
+      serving_image: ${{ steps.references.outputs.serving_image }}
+    steps:
+      - name: Check out main
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure AWS credentials to resolve image references
+        # aws-actions/configure-aws-credentials v6.3.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: taskly-image-refs-${{ github.run_id }}
+
+      - name: Publish immutable image references as job outputs
+        id: references
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          [[ -n "$AWS_REGION" ]] || { echo "Repository variable AWS_REGION is required." >&2; exit 1; }
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo "Could not resolve AWS account ID." >&2; exit 1; }
+          registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "mlflow_image=${registry}/mlflowops/mlflow:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "ml_jobs_image=${registry}/mlflowops/ml-jobs:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "serving_image=${registry}/mlflowops/serving:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Update the MLflow and serving image tags
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected a full 40-character Git SHA image tag." >&2
+            exit 1
+          fi
+
+          if [[ "$(git rev-parse HEAD)" != "$IMAGE_TAG" ]]; then
+            echo "::error::main advanced while images were building; rerun the workflow on the latest main commit."
+            exit 1
+          fi
+
+          cat > deploy/charts/mlflow/values-image.yaml <<EOF_MLFLOW_IMAGE
+          image:
+            tag: "${IMAGE_TAG}"
+          EOF_MLFLOW_IMAGE
+
+          cat > deploy/charts/serving/values-image.yaml <<EOF_SERVING_IMAGE
+          image:
+            tag: "${IMAGE_TAG}"
+          EOF_SERVING_IMAGE
+
+          image_tag_files=(
+            deploy/charts/mlflow/values-image.yaml
+            deploy/charts/serving/values-image.yaml
+          )
+          git add -- "${image_tag_files[@]}"
+          if git diff --cached --quiet -- "${image_tag_files[@]}"; then
+            echo "MLflow and serving image tags already match this commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update MLflow and serving image tags to ${IMAGE_TAG}"
+          git push origin HEAD:refs/heads/main

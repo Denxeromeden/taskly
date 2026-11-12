@@ -13,7 +13,17 @@ spec:
     helm:
       releaseName: serving-api
       valueFiles:
+        - values-image.yaml
         - values-production.yaml
+      parameters:
+        - name: image.repository
+          value: {{ required "servingImageRepository is required" .Values.servingImageRepository | quote }}
+          forceString: true
+        - name: gateway.certificateArn
+          value: {{ required "certificateArn is required" .Values.certificateArn | quote }}
+          forceString: true
+        - name: networkPolicy.publicSubnetCidrs
+          value: {{ required "publicSubnetCidrs is required" (join "," .Values.publicSubnetCidrs) | quote }}
   destination:
     server: https://kubernetes.default.svc
     namespace: production

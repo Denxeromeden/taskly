@@ -26,6 +26,14 @@ spec:
         - name: mlflowArtifactsBucket
           value: {{ .Values.mlflowArtifactsBucket | quote }}
           forceString: true
+        - name: servingImageRepository
+          value: {{ required "servingImageRepository is required" .Values.servingImageRepository | quote }}
+          forceString: true
+        - name: certificateArn
+          value: {{ required "certificateArn is required" .Values.certificateArn | quote }}
+          forceString: true
+        - name: publicSubnetCidrs
+          value: {{ required "publicSubnetCidrs is required" (join "," .Values.publicSubnetCidrs) | quote }}
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

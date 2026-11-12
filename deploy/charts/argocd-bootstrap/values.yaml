@@ -3,3 +3,6 @@ targetRevision: ""
 mlflowImageRepository: ""
 mlflowRegion: ""
 mlflowArtifactsBucket: ""
+servingImageRepository: ""
+certificateArn: ""
+publicSubnetCidrs: []

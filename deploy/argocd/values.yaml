@@ -3,9 +3,12 @@ targetRevision: ""
 mlflowImageRepository: ""
 mlflowRegion: ""
 mlflowArtifactsBucket: ""
+servingImageRepository: ""
+certificateArn: ""
+publicSubnetCidrs: []
 
 applications:
   servingStaging:
-    enabled: false
+    enabled: true
   servingProduction:
     enabled: false

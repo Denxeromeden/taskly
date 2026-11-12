@@ -15,7 +15,12 @@ spec:
     helm:
       releaseName: serving-api
       valueFiles:
+        - values-image.yaml
         - values-staging.yaml
+      parameters:
+        - name: image.repository
+          value: {{ required "servingImageRepository is required" .Values.servingImageRepository | quote }}
+          forceString: true
   destination:
     server: https://kubernetes.default.svc
     namespace: staging
