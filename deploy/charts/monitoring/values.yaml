@@ -104,7 +104,12 @@ kube-prometheus-stack:
   kubeProxy:
     enabled: false
 
+  kubelet:
+    namespace: monitoring
+
   prometheusOperator:
+    kubeletService:
+      namespace: monitoring
     resources:
       requests:
         cpu: 50m
