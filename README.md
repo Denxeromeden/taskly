@@ -195,12 +195,12 @@ The EKS/MLflow workload is operated separately from the local Docker Compose dev
 
 ### Trigger a retraining run
 
-1. In GitHub Actions, manually run `CI security` on the `main` branch. Wait for all validation gates, all three image builds/scans, ECR publication and the `update-mlflow-image-tag` job to finish. The workflow commits the immutable Git-SHA tag to `deploy/charts/mlflow/values-image.yaml`.
-2. Manually run `ML jobs` on `main` and select `operation: train`. The workflow creates a Spot-only training Job, waits for completion, creates a promotion Job and updates `@staging` only when the candidate is accepted. The workflow is serialized to prevent overlapping training/promotion runs.
-3. Once the first successful promotion has created `@staging`, enable the `serving-staging` Argo CD Application and verify the staging API. Accepted later promotions restart the staging Deployment; rejected candidates do not.
+1. A push to `main` that changes image inputs publishes the three images, then starts `ML lifecycle` with that exact Git SHA. The workflow validates all three ECR tags, creates a Spot-only training Job, updates `@staging` only when the candidate is accepted, restarts the staging Deployment and runs the in-cluster staging smoke Job.
+2. `ML lifecycle` also runs daily at 02:00 UTC and can be dispatched manually from `main`. Those paths reuse the latest committed scanned image tag instead of rebuilding. Set `full_release: true` on a manual dispatch to request the protected production release after staging passes.
+3. Rejected candidates leave the staging alias and Deployment unchanged, and no production approval is requested. All training and promotion workflows share one concurrency group, so they never run in parallel.
 
-The `ML jobs` workflow also supports `seed` (insert starter data only when no labeled rows exist) and `add-data` (append a normal or drifted synthetic batch). See the runbook for their inputs and details.
+`ML jobs` is now limited to `seed` (insert starter data only when no labeled rows exist) and `add-data` (append a normal or drifted synthetic batch). See the runbook for their inputs and details.
 
 ### Production promotion status
 
-The Day 2 workflow does not change `@production`, enable the production Argo CD Application or create a public ALB. Production promotion requires the separate Day 3 protected-approval workflow; do not promote by manually changing the alias. The production Helm values and Gateway API templates are prepared, but remain inactive until that workflow and approval controls are implemented.
+Production promotion runs only through the protected `production` GitHub Environment in `ML lifecycle`; the approval happens after a successful staging smoke test. The promotion Job re-checks the candidate against the current production metric and sets `@production` to the exact version behind `@staging`. Do not promote by manually changing the alias. The production Helm values and Gateway API templates remain inactive until the first approved release.

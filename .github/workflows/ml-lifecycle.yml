@@ -1,0 +1,662 @@
+name: ML lifecycle
+
+on:
+  workflow_run:
+    workflows:
+      - CI security
+    types:
+      - completed
+  schedule:
+    # Daily retraining reuses the most recently committed scanned image.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      full_release:
+        description: Request the protected production release after a successful staging smoke test
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Shared with ml-jobs.yml so manual, scheduled and push runs never overlap.
+  group: taskly-mlflow-training
+  cancel-in-progress: false
+
+env:
+  MLFLOW_TRACKING_URI: http://mlflow.mlflow.svc.cluster.local:5000
+  MODEL_NAME: task-priority-classifier
+
+jobs:
+  validate:
+    name: Validate trigger and image set
+    # A workflow_run may only start from a successful CI security push to main.
+    # Scheduled and manual runs are handled by their own source checks below.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      proceed: ${{ steps.images.outputs.proceed }}
+      image_tag: ${{ steps.resolve.outputs.image_tag }}
+      ml_jobs_image: ${{ steps.images.outputs.ml_jobs_image }}
+      production_requested: ${{ steps.resolve.outputs.production_requested }}
+      source: ${{ steps.resolve.outputs.source }}
+    steps:
+      - name: Check out main
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve the source and immutable image tag
+        id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_VALUE: ${{ github.ref }}
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          FULL_RELEASE: ${{ inputs.full_release }}
+        run: |
+          set -euo pipefail
+
+          image_tag=""
+          production_requested=false
+
+          case "$EVENT_NAME" in
+            workflow_run)
+              image_tag="$WORKFLOW_RUN_SHA"
+              production_requested=true
+              source="push"
+              ;;
+            schedule)
+              source="schedule"
+              ;;
+            workflow_dispatch)
+              if [[ "$GITHUB_REF_VALUE" != "refs/heads/main" ]]; then
+                echo "This workflow must be dispatched from main; AWS OIDC is restricted to that ref." >&2
+                exit 1
+              fi
+              production_requested="$FULL_RELEASE"
+              source="manual"
+              ;;
+            *)
+              echo "Unsupported event: ${EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "$source" != "push" ]]; then
+            image_tag="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+
+          def read_tag(path: str) -> str:
+              values = Path(path).read_text(encoding="utf-8")
+              tags = re.findall(r"(?m)^[ ]{2}tag:[ ]*[\"']?([0-9a-f]{40})[\"']?[ ]*$", values)
+              if len(tags) != 1:
+                  raise SystemExit(
+                      f"{path} must contain exactly one full Git-SHA tag from a successful main image build"
+                  )
+              return tags[0]
+
+
+          mlflow_tag = read_tag("deploy/charts/mlflow/values-image.yaml")
+          serving_tag = read_tag("deploy/charts/serving/values-image.yaml")
+          if mlflow_tag != serving_tag:
+              raise SystemExit(
+                  "MLflow and serving image tag files disagree; refusing to reuse an ambiguous image set"
+              )
+          print(mlflow_tag)
+          PY
+          )"
+          fi
+
+          if [[ ! "$image_tag" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected a full 40-character Git SHA image tag, got '${image_tag}'." >&2
+            exit 1
+          fi
+
+          printf 'source=%s\n' "$source" >> "$GITHUB_OUTPUT"
+          printf 'image_tag=%s\n' "$image_tag" >> "$GITHUB_OUTPUT"
+          printf 'production_requested=%s\n' "$production_requested" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through GitHub OIDC
+        # aws-actions/configure-aws-credentials v6.3.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: taskly-ml-lifecycle-validate-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Verify the same immutable image exists in all ECR repositories
+        id: images
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
+          SOURCE: ${{ steps.resolve.outputs.source }}
+          PRODUCTION_REQUESTED: ${{ steps.resolve.outputs.production_requested }}
+        run: |
+          set -euo pipefail
+          [[ -n "$AWS_REGION" ]] || { echo "Repository variable AWS_REGION is required." >&2; exit 1; }
+
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo "Could not resolve AWS account ID." >&2; exit 1; }
+          registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "::add-mask::$account_id"
+          echo "::add-mask::$registry"
+
+          missing=()
+          for repository in mlflowops/mlflow mlflowops/ml-jobs mlflowops/serving; do
+            echo "Checking ${repository}:${IMAGE_TAG}..."
+            if ! aws ecr describe-images \
+                --region "$AWS_REGION" \
+                --repository-name "$repository" \
+                --image-ids "imageTag=${IMAGE_TAG}" \
+                >/dev/null 2>&1; then
+              missing+=("$repository")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            if [[ "$SOURCE" == "push" ]]; then
+              # A docs-only push succeeds in CI while the path-filtered image
+              # release is skipped. Do not treat that as a failed pipeline.
+              {
+                echo "### ML lifecycle skipped"
+                echo
+                echo "No published image set exists for \`${IMAGE_TAG}\` in: ${missing[*]}."
+                echo "This push did not change image inputs, so the image release job was skipped."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice::No image set published for ${IMAGE_TAG}; skipping the lifecycle pipeline."
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "The committed image tag ${IMAGE_TAG} is missing from: ${missing[*]}." >&2
+            exit 1
+          fi
+
+          printf 'proceed=true\n' >> "$GITHUB_OUTPUT"
+          printf 'ml_jobs_image=%s\n' "${registry}/mlflowops/ml-jobs:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### ML lifecycle"
+            echo
+            echo "- Source: \`${SOURCE}\`"
+            echo "- Image tag: \`${IMAGE_TAG}\`"
+            echo "- Production requested: \`${PRODUCTION_REQUESTED}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  train-and-stage:
+    name: Train, promote to staging and smoke test
+    needs:
+      - validate
+    if: needs.validate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      staging_ready: ${{ steps.pipeline.outputs.staging_ready }}
+    steps:
+      - name: Check out the image source commit
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.image_tag }}
+          persist-credentials: false
+
+      - name: Configure AWS credentials through GitHub OIDC
+        # aws-actions/configure-aws-credentials v6.3.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: taskly-ml-lifecycle-train-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Configure kubectl for the existing EKS cluster
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name mlflowops-demo --region "$AWS_REGION" >/dev/null
+
+      - name: Run training, staging promotion and staging smoke test
+        id: pipeline
+        shell: bash
+        env:
+          ML_JOBS_IMAGE: ${{ needs.validate.outputs.ml_jobs_image }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          SOURCE: ${{ needs.validate.outputs.source }}
+        run: |
+          set -euo pipefail
+
+          diagnose_job() {
+            local job_name="$1"
+            echo "--- Pods for ${job_name} ---"
+            kubectl -n ml-jobs get pods -l "job-name=${job_name}" -o wide || true
+            echo "--- Events for ${job_name} ---"
+            kubectl -n ml-jobs get events --field-selector "involvedObject.name=${job_name}" \
+              --sort-by=.lastTimestamp || true
+            echo "--- Logs for ${job_name} ---"
+            kubectl -n ml-jobs logs "job/${job_name}" --all-containers=true --prefix || true
+            echo "--- Job details for ${job_name} ---"
+            kubectl -n ml-jobs describe job "$job_name" || true
+          }
+
+          create_job() {
+            local template="$1"
+            local job_name="$2"
+            if [[ ! -f "$template" ]]; then
+              echo "::error::Missing Job template ${template}." >&2
+              return 1
+            fi
+            export JOB_NAME="$job_name"
+            export ML_JOBS_IMAGE
+            python3 - "$template" <<'PY' | kubectl -n ml-jobs create -f -
+          from pathlib import Path
+          import os
+          import re
+          import sys
+
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          required = {"JOB_NAME", "ML_JOBS_IMAGE"}
+
+          def replace(match):
+              name = match.group(1)
+              if name not in required:
+                  raise SystemExit(f"unexpected template variable: {name}")
+              if name not in os.environ:
+                  raise SystemExit(f"missing template variable: {name}")
+              return os.environ[name]
+
+          rendered = re.sub(r"\$\{([A-Z_]+)\}", replace, source)
+          if re.search(r"\$\{[A-Z_]+\}", rendered):
+              raise SystemExit("unresolved Job template variable")
+          sys.stdout.write(rendered)
+          PY
+          }
+
+          wait_for_job() {
+            local job_name="$1"
+            local timeout_seconds="$2"
+            local print_logs="${3:-true}"
+            local deadline=$(( $(date +%s) + timeout_seconds ))
+
+            while (( $(date +%s) < deadline )); do
+              local job_json
+              if ! job_json="$(kubectl -n ml-jobs get job "$job_name" -o json)"; then
+                echo "Could not read Job ${job_name}." >&2
+                diagnose_job "$job_name"
+                return 1
+              fi
+
+              local succeeded failed
+              succeeded="$(jq -r '.status.succeeded // 0' <<< "$job_json")"
+              failed="$(jq -r 'any(.status.conditions[]?; .type == "Failed" and .status == "True")' <<< "$job_json")"
+
+              if (( succeeded >= 1 )); then
+                if [[ "$print_logs" == "true" ]]; then
+                  kubectl -n ml-jobs logs "job/${job_name}" --all-containers=true --prefix
+                fi
+                return 0
+              fi
+
+              if [[ "$failed" == "true" ]]; then
+                echo "Job ${job_name} reached a failed condition." >&2
+                diagnose_job "$job_name"
+                return 1
+              fi
+              sleep 10
+            done
+
+            echo "Timed out waiting for Job ${job_name} after ${timeout_seconds}s." >&2
+            diagnose_job "$job_name"
+            return 1
+          }
+
+          wait_for_staging_rollout() {
+            local timeout_seconds=300
+            local initial
+            initial="$(kubectl -n staging get deployment serving-api -o json)"
+            local generation desired deadline
+            generation="$(jq -r '.metadata.generation' <<< "$initial")"
+            desired="$(jq -r '.spec.replicas // 1' <<< "$initial")"
+            deadline=$(( $(date +%s) + timeout_seconds ))
+
+            while (( $(date +%s) < deadline )); do
+              local current observed updated available failed
+              current="$(kubectl -n staging get deployment serving-api -o json)"
+              observed="$(jq -r '.status.observedGeneration // 0' <<< "$current")"
+              updated="$(jq -r '.status.updatedReplicas // 0' <<< "$current")"
+              available="$(jq -r '.status.availableReplicas // 0' <<< "$current")"
+              failed="$(jq -r 'any(.status.conditions[]?; .type == "Progressing" and .status == "False" and .reason == "ProgressDeadlineExceeded")' <<< "$current")"
+
+              if (( observed >= generation && updated >= desired && available >= desired )); then
+                echo "Staging serving-api rollout completed (${available}/${desired} replicas available)."
+                return 0
+              fi
+              if [[ "$failed" == "true" ]]; then
+                echo "Staging serving-api reported ProgressDeadlineExceeded." >&2
+                return 1
+              fi
+              sleep 5
+            done
+
+            echo "Timed out waiting for the staging serving-api Deployment to become available." >&2
+            kubectl -n staging get deployment serving-api -o wide || true
+            kubectl -n staging get pods -l app.kubernetes.io/name=serving -o wide || true
+            return 1
+          }
+
+          summary_header() {
+            echo "### ML lifecycle: train and stage"
+            echo
+            echo "- Image tag: \`${IMAGE_TAG}\`"
+            echo "- Source: \`${SOURCE}\`"
+            echo
+          }
+
+          run_name="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          staging_ready=false
+
+          train_job="train-${run_name}"
+          create_job jobs/manifests/train.yaml "$train_job"
+          # train.yaml has activeDeadlineSeconds 1200; allow a short margin.
+          if ! wait_for_job "$train_job" 1260; then
+            {
+              summary_header
+              echo "Training failed or timed out on the Spot-only NodePool. No promotion Job was created and staging was left unchanged."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Training did not complete on the Spot-only NodePool; no on-demand fallback is configured." >&2
+            exit 1
+          fi
+
+          promote_job="promote-${run_name}"
+          create_job jobs/manifests/promote.yaml "$promote_job"
+          wait_for_job "$promote_job" 360 false
+          promotion_logs="$(kubectl -n ml-jobs logs "job/${promote_job}" --all-containers=true --prefix)"
+          printf '%s\n' "$promotion_logs"
+
+          decision="$(grep -Eo 'decision=[A-Z_]+' <<< "$promotion_logs" | tail -n1 | cut -d= -f2 || true)"
+          candidate_version="$(grep -Eo 'candidate_version=[0-9]+' <<< "$promotion_logs" | tail -n1 | cut -d= -f2 || true)"
+
+          if [[ "$decision" == "INITIAL_STAGING_CANDIDATE" || "$decision" == "PROMOTED_TO_STAGING" ]]; then
+            if ! kubectl -n staging get deployment serving-api >/dev/null 2>&1; then
+              {
+                summary_header
+                echo "Promotion decision: \`${decision}\` (candidate \`${candidate_version:-unknown}\`)."
+                echo
+                echo "The staging alias moved, but \`staging/serving-api\` does not exist. Reconcile the \`serving-staging\` Application before retrying."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "Staging promotion succeeded but staging/serving-api is not deployed yet." >&2
+              exit 1
+            fi
+
+            kubectl -n staging rollout restart deployment/serving-api
+            wait_for_staging_rollout
+
+            smoke_job="staging-smoke-${run_name}"
+            create_job jobs/manifests/staging-smoke.yaml "$smoke_job"
+            if ! wait_for_job "$smoke_job" 300; then
+              {
+                summary_header
+                echo "Promotion decision: \`${decision}\` (candidate \`${candidate_version:-unknown}\`)."
+                echo
+                echo "Staging smoke test failed. Production approval was not requested."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
+            staging_ready=true
+            {
+              summary_header
+              echo "Promotion decision: \`${decision}\` (candidate \`${candidate_version:-unknown}\`)."
+              echo "- Staging rollout: available"
+              echo "- Staging smoke: passed"
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$decision" == "REJECTED_METRIC_REGRESSION" ]]; then
+            {
+              summary_header
+              echo "Promotion decision: \`REJECTED_METRIC_REGRESSION\` (candidate \`${candidate_version:-unknown}\`)."
+              echo
+              echo "Staging alias and Deployment were left unchanged. Production approval was not requested."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Candidate rejected; staging alias and running Deployment were left unchanged."
+          else
+            {
+              summary_header
+              echo "Promotion completed without a recognized decision. Staging was not restarted and production approval was not requested."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Promotion completed without a recognized decision; staging was not restarted." >&2
+            exit 1
+          fi
+
+          echo "staging_ready=${staging_ready}" >> "$GITHUB_OUTPUT"
+
+  production-release:
+    name: Protected production release
+    needs:
+      - validate
+      - train-and-stage
+    if: >-
+      needs.train-and-stage.result == 'success' &&
+      needs.train-and-stage.outputs.staging_ready == 'true' &&
+      needs.validate.outputs.production_requested == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out main
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure AWS credentials through the production Environment
+        # The OIDC trust policy contains the environment:production subject; this
+        # step only runs after the reviewer gate approves the deployment.
+        # aws-actions/configure-aws-credentials v6.3.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: taskly-ml-lifecycle-production-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Configure kubectl for the existing EKS cluster
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name mlflowops-demo --region "$AWS_REGION" >/dev/null
+
+      - name: Create and wait for the production promotion Job
+        id: promote
+        shell: bash
+        env:
+          ML_JOBS_IMAGE: ${{ needs.validate.outputs.ml_jobs_image }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          template="jobs/manifests/promote-production.yaml"
+          if [[ ! -f "$template" ]]; then
+            echo "::error::${template} is missing; the production promotion operation (section 5.5) has not been implemented yet." >&2
+            exit 1
+          fi
+
+          run_name="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          job_name="promote-production-${run_name}"
+          export JOB_NAME="$job_name"
+          export ML_JOBS_IMAGE
+          python3 - "$template" <<'PY' | kubectl -n ml-jobs create -f -
+          from pathlib import Path
+          import os
+          import re
+          import sys
+
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          required = {"JOB_NAME", "ML_JOBS_IMAGE"}
+
+          def replace(match):
+              name = match.group(1)
+              if name not in required:
+                  raise SystemExit(f"unexpected template variable: {name}")
+              if name not in os.environ:
+                  raise SystemExit(f"missing template variable: {name}")
+              return os.environ[name]
+
+          rendered = re.sub(r"\$\{([A-Z_]+)\}", replace, source)
+          if re.search(r"\$\{[A-Z_]+\}", rendered):
+              raise SystemExit("unresolved Job template variable")
+          sys.stdout.write(rendered)
+          PY
+
+          deadline=$(( $(date +%s) + 360 ))
+          while (( $(date +%s) < deadline )); do
+            job_json="$(kubectl -n ml-jobs get job "$job_name" -o json)"
+            succeeded="$(jq -r '.status.succeeded // 0' <<< "$job_json")"
+            failed="$(jq -r 'any(.status.conditions[]?; .type == "Failed" and .status == "True")' <<< "$job_json")"
+            if (( succeeded >= 1 )); then
+              kubectl -n ml-jobs logs "job/${job_name}" --all-containers=true --prefix
+              exit 0
+            fi
+            if [[ "$failed" == "true" ]]; then
+              kubectl -n ml-jobs get pods -l "job-name=${job_name}" -o wide || true
+              kubectl -n ml-jobs logs "job/${job_name}" --all-containers=true --prefix || true
+              kubectl -n ml-jobs describe job "$job_name" || true
+              echo "Production promotion Job ${job_name} failed." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          kubectl -n ml-jobs describe job "$job_name" || true
+          echo "Timed out waiting for production promotion Job ${job_name}." >&2
+          exit 1
+
+      - name: Activate the production Application on the first release
+        id: activate
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          if kubectl -n argocd get application serving-production >/dev/null 2>&1; then
+            echo "first_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "first_release=true" >> "$GITHUB_OUTPUT"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          for attempt in 1 2 3; do
+            git pull --rebase origin main
+            python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("deploy/argocd/values.yaml")
+          text = path.read_text(encoding="utf-8")
+          old = "  servingProduction:\n    enabled: false"
+          new = "  servingProduction:\n    enabled: true"
+          if old in text:
+              if text.count(old) != 1:
+                  raise SystemExit("expected exactly one disabled servingProduction flag in deploy/argocd/values.yaml")
+              path.write_text(text.replace(old, new), encoding="utf-8")
+          elif new not in text:
+              raise SystemExit("could not find the servingProduction enabled flag in deploy/argocd/values.yaml")
+          PY
+
+            if ! git diff --quiet -- deploy/argocd/values.yaml; then
+              git add -- deploy/argocd/values.yaml
+              git commit -m "chore(argocd): enable serving-production after approved release"
+            fi
+
+            if [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]]; then
+              echo "servingProduction is already enabled in Git."
+              break
+            fi
+
+            if git push origin HEAD:refs/heads/main; then
+              echo "Enabled servingProduction in Git."
+              break
+            fi
+            if (( attempt == 3 )); then
+              echo "Could not push the production activation commit after three attempts." >&2
+              exit 1
+            fi
+            echo "Push rejected; retrying after rebase." >&2
+          done
+
+      - name: Roll out production and verify the deployed image tag
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          FIRST_RELEASE: ${{ steps.activate.outputs.first_release }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$FIRST_RELEASE" == "true" ]]; then
+            # Argo CD creates the Application from the new commit; wait for the
+            # Deployment before asking kubectl for its rollout status.
+            deadline=$(( $(date +%s) + 600 ))
+            until kubectl -n production get deployment serving-api >/dev/null 2>&1; do
+              if (( $(date +%s) >= deadline )); then
+                echo "Argo CD did not create production/serving-api within 10 minutes." >&2
+                kubectl -n argocd get application serving-production -o yaml || true
+                exit 1
+              fi
+              sleep 10
+            done
+          else
+            kubectl -n production rollout restart deployment/serving-api
+          fi
+
+          kubectl -n production rollout status deployment/serving-api --timeout=600s
+
+          image="$(kubectl -n production get deployment serving-api -o jsonpath='{.spec.template.spec.containers[0].image}')"
+          if [[ "$image" != *":${IMAGE_TAG}" ]]; then
+            echo "Production Deployment uses ${image}, not the approved tag ${IMAGE_TAG}." >&2
+            exit 1
+          fi
+
+          echo "Production serving-api is available from image ${image}."
+
+      - name: Record the production result
+        if: always()
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### ML lifecycle: production release"
+            echo
+            echo "- Image tag: \`${IMAGE_TAG}\`"
+            echo "- Job result: \`${JOB_STATUS}\`"
+            echo
+            echo "Verify the production pod loaded the version behind \`@production\` and that a public \`POST /predict\` returns that version. Check the Gateway is Programmed/Accepted with a healthy ALB target (section 5.7) before closing the release."
+          } >> "$GITHUB_STEP_SUMMARY"

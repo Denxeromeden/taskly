@@ -9,8 +9,7 @@ on:
         options:
           - seed
           - add-data
-          - train
-        default: train
+        default: seed
         required: true
       mode:
         description: Synthetic data mode (used only by add-data)
@@ -77,7 +76,7 @@ jobs:
           fi
 
           case "$OPERATION" in
-            seed|add-data|train) ;;
+            seed|add-data) ;;
             *) echo "Unsupported operation: $OPERATION" >&2; exit 1 ;;
           esac
 
@@ -268,40 +267,6 @@ jobs:
             return 1
           }
 
-          wait_for_staging_rollout() {
-            local timeout_seconds=300
-            local initial
-            initial="$(kubectl -n staging get deployment serving-api -o json)"
-            local generation desired deadline
-            generation="$(jq -r '.metadata.generation' <<< "$initial")"
-            desired="$(jq -r '.spec.replicas // 1' <<< "$initial")"
-            deadline=$(( $(date +%s) + timeout_seconds ))
-
-            while (( $(date +%s) < deadline )); do
-              local current observed updated available failed
-              current="$(kubectl -n staging get deployment serving-api -o json)"
-              observed="$(jq -r '.status.observedGeneration // 0' <<< "$current")"
-              updated="$(jq -r '.status.updatedReplicas // 0' <<< "$current")"
-              available="$(jq -r '.status.availableReplicas // 0' <<< "$current")"
-              failed="$(jq -r 'any(.status.conditions[]?; .type == "Progressing" and .status == "False" and .reason == "ProgressDeadlineExceeded")' <<< "$current")"
-
-              if (( observed >= generation && updated >= desired && available >= desired )); then
-                echo "Staging serving-api rollout completed (${available}/${desired} replicas available)."
-                return 0
-              fi
-              if [[ "$failed" == "true" ]]; then
-                echo "Staging serving-api reported ProgressDeadlineExceeded." >&2
-                return 1
-              fi
-              sleep 5
-            done
-
-            echo "Timed out waiting for the staging serving-api Deployment to become available." >&2
-            kubectl -n staging get deployment serving-api -o wide || true
-            kubectl -n staging get pods -l app.kubernetes.io/name=serving -o wide || true
-            return 1
-          }
-
           run_name="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           case "$OPERATION" in
@@ -314,39 +279,6 @@ jobs:
               job_name="add-data-${run_name}"
               create_job jobs/manifests/add-data.yaml "$job_name"
               wait_for_job "$job_name" 360
-              ;;
-            train)
-              train_job="train-${run_name}"
-              create_job jobs/manifests/train.yaml "$train_job"
-              # The Job's activeDeadlineSeconds is 1200; allow a short margin for status propagation.
-              if ! wait_for_job "$train_job" 1260; then
-                echo "Training did not complete on the Spot-only NodePool. Check pod scheduling events and Spot capacity; no on-demand fallback is configured." >&2
-                exit 1
-              fi
-
-              promote_job="promote-${run_name}"
-              create_job jobs/manifests/promote.yaml "$promote_job"
-              wait_for_job "$promote_job" 360 false
-              promotion_logs="$(kubectl -n ml-jobs logs "job/${promote_job}" --all-containers=true --prefix)"
-              printf '%s\n' "$promotion_logs"
-
-              if grep -Eq 'decision=(INITIAL_STAGING_CANDIDATE|PROMOTED_TO_STAGING)([[:space:]]|$)' <<< "$promotion_logs"; then
-                deployment_output=""
-                if deployment_output="$(kubectl -n staging get deployment serving-api -o json 2>&1)"; then
-                  kubectl -n staging rollout restart deployment/serving-api
-                  wait_for_staging_rollout
-                elif grep -Eqi 'notfound|not found' <<< "$deployment_output"; then
-                  echo "::notice::Promotion accepted and @staging is initialized, but serving-api is not deployed yet. Enable the serving-staging Argo CD Application; Argo CD will create the Deployment using @staging."
-                else
-                  printf '%s\n' "$deployment_output" >&2
-                  exit 1
-                fi
-              elif grep -Eq 'decision=REJECTED_METRIC_REGRESSION([[:space:]]|$)' <<< "$promotion_logs"; then
-                echo "Candidate rejected; staging alias and running Deployment were left unchanged."
-              else
-                echo "Promotion completed without a recognized decision; staging was not restarted." >&2
-                exit 1
-              fi
               ;;
             *)
               echo "Unsupported operation: $OPERATION" >&2

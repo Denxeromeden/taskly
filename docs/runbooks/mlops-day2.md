@@ -53,7 +53,7 @@ Current CI policy exceptions and a scan-gate mismatch:
 
 The PR and push triggers in `ci-security.yml` are commented out at present. A manual run does not establish that a PR-triggered, no-AWS CI path has been exercised. Also verify that the deployed IAM role trust policy matches the corrected `main`-branch OIDC subject in the current Terraform source; changing the source alone does not update an already deployed role.
 
-## Run a data or training Job
+## Run a data Job
 
 In GitHub Actions, select `ML jobs`, choose the `main` branch and use `Run workflow`. The workflow serializes runs with the `taskly-mlflow-training` concurrency group and creates uniquely named Kubernetes Jobs. It waits for completion, prints logs and diagnoses failed or timed-out Jobs. It does not use `kubectl apply` to mutate an earlier Job.
 
@@ -76,23 +76,24 @@ Choose `operation: add-data` and set:
 
 ### Train and promote to staging
 
-Choose `operation: train`. The workflow:
+Use the `ML lifecycle` workflow. It runs automatically after a successful `CI security` push to `main`, daily at 02:00 UTC, and on manual dispatch from `main`. The workflow:
 
-1. creates the training Job using the immutable `ml-jobs` image tag;
-2. runs the training pod only on the `training-spot` NodePool (`workload=training` selector and toleration);
-3. waits for the Job, with the Job's 1200-second active deadline and a small status-propagation margin;
-4. creates and waits for the promotion Job only after training succeeds;
-5. inspects the promotion decision and restarts `staging/serving-api` only when the candidate was accepted.
+1. validates the triggering run and confirms the same immutable tag exists in all three ECR repositories;
+2. creates the training Job using that image tag;
+3. runs the training pod only on the `training-spot` NodePool (`workload=training` selector and toleration);
+4. waits for the Job, with the Job's 1200-second active deadline and a small status-propagation margin;
+5. creates and waits for the promotion Job only after training succeeds;
+6. restarts `staging/serving-api` and runs the in-cluster staging smoke Job only when the candidate was accepted.
 
-If Spot capacity is unavailable, the Job times out and the workflow fails. There is no on-demand fallback. A Spot interruption can result in more than one registered model version; promotion selects the newest registered version after the successful training Job. Keep training runs serialized through this workflow.
+If Spot capacity is unavailable, the Job times out and the workflow fails. There is no on-demand fallback. A Spot interruption can result in more than one registered model version; promotion selects the newest registered version after the successful training Job. Keep training runs serialized through this workflow; it shares the `taskly-mlflow-training` concurrency group with every other training path.
 
-Promotion compares the candidate's stored `f1_macro` against the current `@production` model. The first successful run, when no production alias exists, initialises `@staging` only. A candidate greater than or equal to the production score may update `@staging`; a lower-scoring candidate is rejected and leaves the existing staging alias and running staging Deployment unchanged. Production is never modified by this workflow.
+The staging promotion compares the candidate's stored `f1_macro` against the current `@production` model. The first successful run, when no production alias exists, initialises `@staging` only. A candidate greater than or equal to the production score may update `@staging`; a lower-scoring candidate is rejected and leaves the existing staging alias and running staging Deployment unchanged. The staging promotion never modifies `@production`.
 
 The training code's existing train/test split runs over the accumulated labeled rows. The score comparison is therefore a simple demonstration metric, not a fixed holdout-set evaluation. Do not compare scores as though the test data were unchanged between runs.
 
 ## Enable and verify staging serving
 
-After the first promotion succeeds and the `@staging` alias exists, enable `applications.servingStaging.enabled` in `deploy/argocd/values.yaml` (or the current equivalent values source) and let Argo CD create the staging Application. Do not enable `applications.servingProduction.enabled` as part of Day 2.
+After the first promotion succeeds and the `@staging` alias exists, the `serving-staging` Application is enabled in Git and loads the immutable image tag. Let Argo CD create or update the staging Application. Do not enable `applications.servingProduction.enabled` manually; the approved `ML lifecycle` production release activates it.
 
 Check Argo CD and the workload:
 
