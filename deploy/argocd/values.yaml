@@ -11,4 +11,4 @@ applications:
   servingStaging:
     enabled: true
   servingProduction:
-    enabled: false
+    enabled: true
