@@ -2,4 +2,4 @@ apiVersion: v2
 name: argocd-applications
 description: Child Applications managed by the Argo CD root Application
 type: application
-version: 0.1.0
+version: 0.1.1

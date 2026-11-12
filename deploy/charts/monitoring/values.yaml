@@ -1,0 +1,390 @@
+kube-prometheus-stack:
+  alertmanager:
+    enabled: true
+    service:
+      type: ClusterIP
+    ingress:
+      enabled: false
+    alertmanagerSpec:
+      replicas: 1
+      resources:
+        requests:
+          cpu: 25m
+          memory: 96Mi
+        limits:
+          cpu: 150m
+          memory: 192Mi
+
+  grafana:
+    enabled: true
+    fullnameOverride: monitoring-grafana
+    service:
+      type: ClusterIP
+      port: 80
+    ingress:
+      enabled: false
+    serviceMonitor:
+      enabled: true
+      labels:
+        release: monitoring
+      interval: 30s
+    admin:
+      existingSecret: monitoring-grafana-credentials
+      userKey: admin-user
+      passwordKey: admin-password
+    persistence:
+      enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    rbac:
+      create: false
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: monitoring
+    additionalDataSources:
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://monitoring-loki:3100
+        isDefault: false
+
+  prometheus:
+    enabled: true
+    service:
+      type: ClusterIP
+    ingress:
+      enabled: false
+    prometheusSpec:
+      replicas: 1
+      retention: 7d
+      scrapeInterval: 30s
+      evaluationInterval: 30s
+      serviceMonitorSelectorNilUsesHelmValues: false
+      serviceMonitorSelector:
+        matchLabels:
+          release: monitoring
+      serviceMonitorNamespaceSelector: {}
+      ruleSelectorNilUsesHelmValues: false
+      ruleSelector:
+        matchLabels:
+          release: monitoring
+      ruleNamespaceSelector: {}
+      resources:
+        requests:
+          cpu: 150m
+          memory: 384Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: gp3
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 10Gi
+
+  kubeControllerManager:
+    enabled: false
+  kubeEtcd:
+    enabled: false
+  kubeScheduler:
+    enabled: false
+  kubeProxy:
+    enabled: false
+
+  prometheusOperator:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+  kubeStateMetrics:
+    enabled: true
+  kube-state-metrics:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+  nodeExporter:
+    enabled: true
+  prometheus-node-exporter:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+
+loki:
+  deploymentMode: Monolithic
+  loki:
+    auth_enabled: false
+    commonConfig:
+      path_prefix: /var/loki
+      replication_factor: 1
+    storage:
+      type: filesystem
+      filesystem:
+        chunks_directory: /var/loki/chunks
+        rules_directory: /var/loki/rules
+    schemaConfig:
+      configs:
+        - from: "2024-04-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: loki_index_
+            period: 24h
+    limits_config:
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+      retention_period: 168h
+    compactor:
+      retention_enabled: true
+      delete_request_store: filesystem
+  singleBinary:
+    enabled: true
+    replicas: 1
+    service:
+      type: ClusterIP
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: gp3
+      whenDeleted: Retain
+      whenScaled: Retain
+    resources:
+      requests:
+        cpu: 100m
+        memory: 384Mi
+      limits:
+        cpu: 500m
+        memory: 768Mi
+  read:
+    enabled: false
+    replicas: 0
+  write:
+    enabled: false
+    replicas: 0
+  backend:
+    enabled: false
+    replicas: 0
+  gateway:
+    enabled: false
+  lokiCanary:
+    enabled: false
+  chunksCache:
+    enabled: false
+  resultsCache:
+    enabled: false
+
+alloy:
+  fullnameOverride: monitoring-alloy
+  global:
+    podSecurityContext:
+      fsGroup: 473
+  crds:
+    create: false
+  controller:
+    type: deployment
+    replicas: 1
+    volumes:
+      extra:
+        - name: alloy-data
+          emptyDir: {}
+        - name: alloy-tmp
+          emptyDir: {}
+  serviceAccount:
+    create: true
+    name: monitoring-alloy
+    automountServiceAccountToken: true
+  rbac:
+    create: true
+    namespaces:
+      - mlflow
+      - ml-jobs
+      - staging
+      - production
+      - monitoring
+    clusterRules: []
+    rules:
+      - apiGroups: [""]
+        resources:
+          - pods
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups: [""]
+        resources:
+          - pods/log
+        verbs:
+          - get
+  alloy:
+    storagePath: /var/lib/alloy/data
+    mounts:
+      extra:
+        - name: alloy-data
+          mountPath: /var/lib/alloy/data
+        - name: alloy-tmp
+          mountPath: /tmp
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 473
+      runAsGroup: 473
+      seccompProfile:
+        type: RuntimeDefault
+      capabilities:
+        drop:
+          - ALL
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+    configMap:
+      create: true
+      content: |
+        logging {
+          level = "info"
+        }
+
+        discovery.kubernetes "pods" {
+          role = "pod"
+          namespaces {
+            names = ["mlflow", "ml-jobs", "staging", "production", "monitoring"]
+          }
+        }
+
+        discovery.relabel "pod_logs" {
+          targets = discovery.kubernetes.pods.targets
+
+          rule {
+            source_labels = ["__meta_kubernetes_namespace"]
+            target_label  = "namespace"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_container_name"]
+            target_label  = "container"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+            target_label  = "app"
+          }
+        }
+
+        loki.source.kubernetes "pods" {
+          targets    = discovery.relabel.pod_logs.output
+          forward_to = [loki.process.pods.receiver]
+        }
+
+        loki.process "pods" {
+          stage.json {
+            expressions = {
+              level = "level",
+            }
+          }
+          stage.labels {
+            values = {
+              level = "",
+            }
+          }
+          stage.label_keep {
+            values = ["namespace", "app", "container", "level"]
+          }
+          forward_to = [loki.write.internal.receiver]
+        }
+
+        loki.write "internal" {
+          endpoint {
+            url = "http://monitoring-loki:3100/loki/api/v1/push"
+          }
+        }
+  ingress:
+    enabled: false
+  networkPolicy:
+    enabled: false
+  service:
+    enabled: true
+    type: ClusterIP
+  serviceMonitor:
+    enabled: false
+
+prometheus-pushgateway:
+  fullnameOverride: monitoring-pushgateway
+  replicaCount: 1
+  runAsStatefulSet: true
+  automountServiceAccountToken: false
+  extraArgs:
+    - --persistence.file=/data/pushgateway.data
+    - --persistence.interval=1m
+  persistentVolume:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    mountPath: /data
+    size: 2Gi
+    storageClass: gp3
+    subPath: ""
+  securityContext:
+    fsGroup: 65534
+    runAsUser: 65534
+    runAsNonRoot: true
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65534
+    capabilities:
+      drop:
+        - ALL
+  service:
+    type: ClusterIP
+    port: 9091
+    targetPort: 9091
+    portName: http
+  ingress:
+    enabled: false
+  route:
+    main:
+      enabled: false
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 96Mi
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    telemetryPath: /metrics
+    interval: 30s
+    honorLabels: true
+    additionalLabels:
+      release: monitoring

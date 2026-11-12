@@ -65,11 +65,15 @@ gateway:
   # Supply the ACM certificate ARN from the platform Terraform output.
   certificateArn: ""
 
+serviceMonitor:
+  enabled: false
+  interval: 30s
+
 networkPolicy:
   # Populate from `terraform -chdir=terraform/infra output -json public_subnet_cidrs`.
   # These must be the ALB public-subnet CIDRs, not the ALB's client source ranges.
   publicSubnetCidrs: []
   # Allow only the labelled staging-smoke Job in ml-jobs to reach staging.
   allowStagingSmoke: true
-  # Enable only after the monitoring workloads are deployed.
+  # Allow Prometheus in the monitoring namespace to scrape /metrics.
   allowMonitoring: false

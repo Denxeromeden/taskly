@@ -10,6 +10,10 @@ autoscaling:
 gateway:
   enabled: false
 
+serviceMonitor:
+  enabled: true
+  interval: 30s
+
 networkPolicy:
   allowStagingSmoke: true
-  allowMonitoring: false
+  allowMonitoring: true

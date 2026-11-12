@@ -1,0 +1,110 @@
+name: Monitoring validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monitoring-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  helm-validation:
+    name: Build, lint and render monitoring chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm 3
+        # Azure/setup-helm v5.1.0
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e
+        with:
+          version: v3.22.1
+
+      - name: Build locked chart dependencies
+        run: helm dependency build deploy/charts/monitoring
+
+      - name: Lint monitoring chart
+        run: helm lint deploy/charts/monitoring
+
+      - name: Render monitoring resources
+        run: |
+          set -euo pipefail
+          helm template monitoring deploy/charts/monitoring \
+            --namespace monitoring \
+            --include-crds > /tmp/monitoring-rendered.yaml
+          if grep -Eq '^kind: (Ingress|Gateway|HTTPRoute)$|^  type: (LoadBalancer|NodePort)$' /tmp/monitoring-rendered.yaml; then
+            echo "Monitoring must remain internal; a public route or Service type was rendered."
+            exit 1
+          fi
+
+      - name: Render root Application and platform AppProjects
+        run: |
+          set -euo pipefail
+          helm template argocd-applications deploy/argocd \
+            --set-string repoURL=https://github.com/Denxeromeden/taskly.git \
+            --set-string targetRevision=main \
+            --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
+            --set-string servingImageRepository=ci-registry-placeholder/mlflowops/serving \
+            --set-string mlflowRegion=eu-central-1 \
+            --set-string mlflowArtifactsBucket=ci-artifacts-placeholder \
+            --set-string certificateArn=ci-placeholder-certificate \
+            --set-json publicSubnetCidrs='["10.0.0.0/24"]' > /tmp/argocd-applications.yaml
+          grep -q 'name: monitoring' /tmp/argocd-applications.yaml
+          grep -q 'path: deploy/charts/monitoring' /tmp/argocd-applications.yaml
+
+          helm template argocd-bootstrap deploy/charts/argocd-bootstrap \
+            --set-string repoURL=https://github.com/Denxeromeden/taskly.git \
+            --set-string targetRevision=main \
+            --set-string mlflowImageRepository=ci-registry-placeholder/mlflowops/mlflow \
+            --set-string servingImageRepository=ci-registry-placeholder/mlflowops/serving \
+            --set-string mlflowRegion=eu-central-1 \
+            --set-string mlflowArtifactsBucket=ci-artifacts-placeholder \
+            --set-string certificateArn=ci-placeholder-certificate \
+            --set-json publicSubnetCidrs='["10.0.0.0/24"]' > /tmp/argocd-bootstrap.yaml
+          grep -q 'namespace: monitoring' /tmp/argocd-bootstrap.yaml
+          grep -q 'kind: ServiceMonitor' /tmp/argocd-bootstrap.yaml
+
+      - name: Lint and render serving chart with monitoring enabled
+        run: |
+          set -euo pipefail
+          helm lint deploy/charts/serving \
+            --values deploy/charts/serving/values-staging.yaml \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
+            --set-string image.tag=ci
+          helm template serving-staging deploy/charts/serving \
+            --namespace staging \
+            --values deploy/charts/serving/values-staging.yaml \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
+            --set-string image.tag=ci > /tmp/serving-staging-rendered.yaml
+          grep -q 'kind: ServiceMonitor' /tmp/serving-staging-rendered.yaml
+          grep -q 'interval: 30s' /tmp/serving-staging-rendered.yaml
+          grep -q 'path: /metrics' /tmp/serving-staging-rendered.yaml
+
+          helm lint deploy/charts/serving \
+            --values deploy/charts/serving/values-production.yaml \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
+            --set-string image.tag=ci \
+            --set-string gateway.certificateArn=ci-placeholder-certificate \
+            --set-json networkPolicy.publicSubnetCidrs='["10.0.0.0/24"]'
+          helm template serving-production deploy/charts/serving \
+            --namespace production \
+            --values deploy/charts/serving/values-production.yaml \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
+            --set-string image.tag=ci \
+            --set-string gateway.certificateArn=ci-placeholder-certificate \
+            --set-json networkPolicy.publicSubnetCidrs='["10.0.0.0/24"]' > /tmp/serving-production-rendered.yaml
+          grep -q 'kind: ServiceMonitor' /tmp/serving-production-rendered.yaml
+

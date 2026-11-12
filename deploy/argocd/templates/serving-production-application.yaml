@@ -7,6 +7,8 @@ kind: Application
 metadata:
   name: serving-production
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: serving
   source:

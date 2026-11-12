@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlflowops-overview-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/name: mlflowops-overview-dashboard
+data:
+  mlflowops-overview.json: |-
+{{ .Files.Get "dashboards/mlflowops-overview.json" | indent 4 }}

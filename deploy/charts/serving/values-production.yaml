@@ -12,10 +12,14 @@ autoscaling:
 
 gateway:
   enabled: true
-  # Supply at render/deploy time from the platform Terraform certificate_arn output.
+  # Supply the ACM certificate ARN from the platform Terraform output.
   certificateArn: ""
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
 
 networkPolicy:
   # Supply at render/deploy time from the infra Terraform public_subnet_cidrs output.
   publicSubnetCidrs: []
-  allowMonitoring: false
+  allowMonitoring: true

@@ -12,3 +12,5 @@ applications:
     enabled: true
   servingProduction:
     enabled: true
+  monitoring:
+    enabled: true

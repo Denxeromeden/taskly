@@ -3,11 +3,18 @@ foundation_contract: docs/foundation-contract.yaml
 model:
   experiment: task-priority-classifier
   registered_name: task-priority-classifier
-  input: [title, description]
-  output_classes: [low, medium, high]
+  input:
+  - title
+  - description
+  output_classes:
+  - low
+  - medium
+  - high
   promotion_metric: f1_macro
   promotion_rule: candidate_greater_than_or_equal_to_production
-  aliases: [staging, production]
+  aliases:
+  - staging
+  - production
   training_script: model/train.py
   training_script_mutable: false
 mlflow:
@@ -19,7 +26,7 @@ mlflow:
   backend_user: mlflow_app
   backend_secret: mlflow-db-credentials
   artifacts_mode: proxied
-  artifacts_destination: "s3://<artifacts_bucket>/mlflow/"
+  artifacts_destination: s3://<artifacts_bucket>/mlflow/
   aws_service_account: mlflow
 jobs:
   namespace: ml-jobs
@@ -28,9 +35,13 @@ jobs:
   database_user: tasks_app
   database_secret: tasks-db-credentials
   tracking_uri: http://mlflow.mlflow.svc.cluster.local:5000
-  service_accounts_without_aws_identity: [seed, add-data, training]
-  training_node_selector: {workload: training}
-  training_toleration: "workload=training:NoSchedule"
+  service_accounts_without_aws_identity:
+  - seed
+  - add-data
+  - training
+  training_node_selector:
+    workload: training
+  training_toleration: workload=training:NoSchedule
 serving:
   image_repository: mlflowops/serving
   container_port: 8000
@@ -38,7 +49,10 @@ serving:
   health: GET /health
   readiness: GET /ready
   metrics: GET /metrics
+  metrics_scrape_interval: 30s
+  metrics_service_monitor: serving-api
   model_loaded_at: startup
+  monitoring_namespace: monitoring
   staging:
     namespace: staging
     service: serving-api
@@ -52,13 +66,102 @@ serving:
     gateway_class: aws-alb
     gateway: serving-public
     http_route: serving-public
-    route_match: {method: POST, path_type: Exact, path: /predict}
-    backend: {service: serving-api, port: 8000}
+    route_match:
+      method: POST
+      path_type: Exact
+      path: /predict
+    backend:
+      service: serving-api
+      port: 8000
     load_balancer_configuration: serving-public-lb
     target_group_configuration: serving-api-targets
 ci:
   workflow_role: foundation_contract.ci.github_oidc_role_arn
-  kubernetes_group: "mlflowops:deployers"
+  kubernetes_group: mlflowops:deployers
   image_tag: full_git_sha
   training_concurrency_group: taskly-mlflow-training
   production_alias_change_requires_approval: true
+monitoring:
+  namespace: monitoring
+  application: monitoring
+  project: platform
+  internal_only: true
+  grafana_admin_secret: mlflowops/monitoring/grafana-admin
+  grafana_kubernetes_secret: monitoring-grafana-credentials
+  components:
+    prometheus:
+      replicas: 1
+      retention: 7d
+      storage_class: gp3
+      storage_size: 10Gi
+    alertmanager:
+      replicas: 1
+    grafana:
+      service_type: ClusterIP
+      dashboard: MLFlowOps Overview
+    loki:
+      mode: Monolithic
+      retention: 168h
+      storage_class: gp3
+      storage_size: 10Gi
+      storage_backend: filesystem
+    alloy:
+      controller: Deployment
+      replicas: 1
+      log_source: kubernetes_api
+    pushgateway:
+      service_type: ClusterIP
+      metrics_path: /metrics
+      persistence: true
+      storage_class: gp3
+      storage_size: 2Gi
+  log_collection:
+    namespaces:
+    - mlflow
+    - ml-jobs
+    - staging
+    - production
+    - monitoring
+    retained_labels:
+    - namespace
+    - app
+    - container
+    - level
+    secret_access: false
+    host_log_mounts: false
+    service_account: monitoring-alloy
+    rbac:
+      pods:
+      - get
+      - list
+      - watch
+      pods_log:
+      - get
+      secret_access: false
+      workload_write_access: false
+  drift_metrics:
+    pushgateway_group:
+      job: taskly-drift-detection
+    labels_must_not_include:
+    - pod
+    - run_uuid
+    - task_id
+    - timestamp
+    names:
+    - taskly_drift_detected
+    - taskly_drift_score
+    - taskly_drift_last_run_timestamp_seconds
+    - taskly_drift_last_success_timestamp_seconds
+    - taskly_drift_reference_rows
+    - taskly_drift_current_rows
+    - taskly_drift_report_upload_success
+  alerts:
+  - ServingHighPredictionErrorRate
+  - ServingDeploymentUnavailable
+  - ServingPodCrashLooping
+  - ServingContainerOOMKilled
+  - DriftDetected
+  - DriftJobStale
+  - DriftPushgatewayUnavailable
+  grafana_access: kubectl_port_forward_only
+  retention_days: 7

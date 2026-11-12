@@ -1,13 +1,14 @@
 # Pinned tool and component versions
 
 Verified on **2026-11-09**. The API framework pins below were refreshed on **2026-11-11**.
-Recheck compatibility before upgrading; this file records chosen pins, not a promise that every
-chart was installed in this execution environment. Workload-layer pins were resolved on
-**2026-11-10** and smoke-tested on Python 3.12.
+Monitoring chart pins were checked on **2026-11-12**. Recheck compatibility before upgrading; this
+file records chosen pins, not a promise that every chart was installed in this execution environment.
+Workload-layer pins were resolved on **2026-11-10** and smoke-tested on Python 3.12.
 
 | Component | Pin | Verification |
 |---|---:|---|
 | Terraform CLI | 1.17.1 (recommended workstation version) | HashiCorp release published 2026-10-28 |
+| Helm CLI (monitoring validation workflow) | 3.22.1 | Exact Helm 3 client pinned in CI for dependency, lint and render checks |
 | AWS provider | 6.72.0 | Registry release published 2026-11-04 |
 | EKS Terraform module | 21.29.0 | Module release 2026-10-07 |
 | AWS Load Balancer Controller Helm chart/app | 3.6.2 | Upstream release published 2026-10-25; Gateway API support documented for v1.6.0 |
@@ -44,6 +45,10 @@ chart was installed in this execution environment. Workload-layer pins were reso
 | Pydantic (Taskly API and serving) | 2.14.3 | Matches the Pydantic version in FastAPI 0.162.4's upstream lock |
 | Prometheus Python client (serving API metrics) | 0.26.0 | Latest PyPI release on 2026-11-11; Python >=3.9; used for the required Counter, Histogram and Gauge exposition |
 | PyYAML (production Gateway contract validator and tests) | 6.0.3 | Latest PyPI release checked 2026-11-12; supports Python >=3.8 |
+| kube-prometheus-stack Helm chart (Prometheus Operator, Prometheus, Alertmanager, Grafana, kube-state-metrics, node-exporter) | 92.14.1 (app v0.94.2) | Exact upstream chart release selected for the monitoring wrapper |
+| Loki Helm chart (Grafana Community) | 18.5.0 (app 3.7.3) | Exact upstream monolithic-capable chart release; filesystem storage selected, no S3 dependency |
+| Grafana Alloy Helm chart | 1.15.0 (app v1.21.3) | Exact upstream chart release; Kubernetes API log collection only |
+| Prometheus Pushgateway Helm chart | 3.9.0 (app v1.11.3) | Exact upstream chart release; internal ClusterIP Service, ServiceMonitor and a 2 GiB gp3 persistence volume |
 
 `constraints/ml-runtime.txt` is the single source for the ML runtime: the MLflow server, ml-jobs
 and serving images all install their requirements with `-c constraints/ml-runtime.txt`, so the
@@ -59,6 +64,13 @@ The Taskly API and serving framework pins were refreshed on **2026-11-11** toget
 1.7.0 is beyond the highest reported fix version in the audit output (1.3.1). Keep these exact
 pins aligned in both `requirements.txt` and `serving/requirements.txt`.
 
+The monitoring chart pins are declared directly in `deploy/charts/monitoring/Chart.yaml` and
+locked in `deploy/charts/monitoring/Chart.lock`. The Prometheus Operator's bundled subcharts are
+versioned by the pinned kube-prometheus-stack release. Loki uses its monolithic filesystem mode
+with a persistent `gp3` volume; Alloy uses Kubernetes API Pod discovery and `pods/log` reads with
+namespace-scoped RBAC; Pushgateway stores its stable metric group on a 2 GiB `gp3` volume and exposes one stable ServiceMonitor target. The monitoring chart
+is built and rendered by `.github/workflows/monitoring-validation.yml`.
+
 Karpenter EC2NodeClass uses the design-approved `al2023@latest` alias. The exact AMI resolved by AWS
 is therefore a runtime value and must be recorded in the deployment evidence after the first apply.
 EKS managed add-ons use `most_recent = true` at cluster creation; capture the resolved versions with
@@ -67,6 +79,7 @@ EKS managed add-ons use `most_recent = true` at cluster creation; capture the re
 ## Official sources checked
 
 - Terraform: https://github.com/hashicorp/terraform/releases
+- Helm CLI: https://github.com/helm/helm/releases
 - AWS provider: https://github.com/hashicorp/terraform-provider-aws/releases
 - EKS module: https://github.com/terraform-aws-modules/terraform-aws-eks/releases
 - Karpenter: https://github.com/kubernetes-sigs/karpenter/releases
@@ -92,3 +105,7 @@ EKS managed add-ons use `most_recent = true` at cluster creation; capture the re
 - Python base image: https://hub.docker.com/_/python
 - Prometheus Python client: https://pypi.org/project/prometheus-client/0.26.0/
 - PyYAML: https://pypi.org/project/PyYAML/6.0.3/
+- kube-prometheus-stack: https://github.com/prometheus-community/helm-charts/tree/kube-prometheus-stack-92.14.1/charts/kube-prometheus-stack
+- Loki: https://github.com/grafana-community/helm-charts/tree/loki-18.5.0/charts/loki
+- Grafana Alloy: https://github.com/grafana/alloy/tree/v1.21.3/operations/helm/charts/alloy
+- Prometheus Pushgateway: https://github.com/prometheus-community/helm-charts/tree/prometheus-pushgateway-3.9.0/charts/prometheus-pushgateway

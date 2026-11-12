@@ -1,0 +1,129 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: taskly-serving-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app.kubernetes.io/name: taskly-serving-alerts
+spec:
+  groups:
+    - name: taskly.serving
+      rules:
+        - alert: ServingHighPredictionErrorRate
+          expr: |
+            (
+              sum by (namespace) (
+                rate(taskly_prediction_requests_total{namespace=~"staging|production", outcome="error"}[5m])
+              )
+              /
+              clamp_min(
+                sum by (namespace) (
+                  rate(taskly_prediction_requests_total{namespace=~"staging|production"}[5m])
+                ),
+                0.001
+              )
+            ) > 0.05
+            and on (namespace)
+            sum by (namespace) (
+              rate(taskly_prediction_requests_total{namespace=~"staging|production"}[5m])
+            ) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Prediction errors exceed 5% in a serving namespace
+            description: The serving API has sustained an error ratio above 5% with sufficient request volume.
+
+        - alert: ServingDeploymentUnavailable
+          expr: |
+            max by (namespace, deployment) (
+              kube_deployment_spec_replicas{namespace=~"staging|production", deployment="serving-api"}
+            )
+            >
+            max by (namespace, deployment) (
+              kube_deployment_status_replicas_available{namespace=~"staging|production", deployment="serving-api"}
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Serving replicas are unavailable in a serving namespace
+            description: The serving Deployment has fewer available replicas than desired for at least five minutes.
+
+        - alert: ServingPodCrashLooping
+          expr: |
+            max by (namespace, pod) (
+              kube_pod_container_status_waiting_reason{
+                namespace=~"staging|production",
+                container="serving-api",
+                reason="CrashLoopBackOff"
+              } == 1
+            )
+            or
+            max by (namespace, pod) (
+              increase(kube_pod_container_status_restarts_total{
+                namespace=~"staging|production",
+                container="serving-api"
+              }[10m])
+            ) > 2
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: Serving container is crash-looping in a serving namespace
+            description: A serving pod is in CrashLoopBackOff or has restarted more than twice in ten minutes.
+
+        - alert: ServingContainerOOMKilled
+          expr: |
+            max by (namespace, pod) (
+              kube_pod_container_status_last_terminated_reason{
+                namespace=~"staging|production",
+                container="serving-api",
+                reason="OOMKilled"
+              } == 1
+            )
+          labels:
+            severity: critical
+          annotations:
+            summary: Serving container was OOM-killed in a serving namespace
+            description: The last termination reason for a serving container is OOMKilled.
+
+        - alert: DriftDetected
+          expr: taskly_drift_detected{job="taskly-drift-detection"} == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Data drift detected for Taskly
+            description: The most recent valid drift comparison exceeded the configured threshold.
+
+        - alert: DriftJobStale
+          expr: |
+            (
+              max(taskly_drift_last_run_timestamp_seconds{job="taskly-drift-detection"}) > 0
+            )
+            and on ()
+            (
+              absent(taskly_drift_last_success_timestamp_seconds{job="taskly-drift-detection"})
+              or
+              time() - max(taskly_drift_last_success_timestamp_seconds{job="taskly-drift-detection"}) > 93600
+            )
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Taskly drift detection has no recent successful run
+            description: A drift attempt has been recorded, but no valid comparison has completed within 26 hours.
+
+        - alert: DriftPushgatewayUnavailable
+          expr: |
+            up{namespace="monitoring", service="monitoring-pushgateway"} == 0
+            or
+            absent(up{namespace="monitoring", service="monitoring-pushgateway"})
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: Prometheus cannot scrape the drift Pushgateway
+            description: The Pushgateway metrics endpoint is absent or has failed its Prometheus scrape.

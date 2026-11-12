@@ -3,6 +3,7 @@ flowchart LR
   GHA -->|Kubernetes group mlflowops:deployers| RBAC[Namespace Roles]
   K8S[EKS workloads] -->|Pod Identity| ESO[External Secrets role]
   ESO -->|Get only mlflowops/* + RDS master| SM[Secrets Manager]
+  ESO -->|Sync Grafana admin credential| GRAF_SECRET[monitoring-grafana-credentials]
   MF[MLflow service account] -->|Pod Identity, mlflow/ prefix only| S3[(Artifacts S3)]
   DR[Drift service account] -->|Pod Identity, drift-reports/ prefix| S3
   ROUTE[Serving HTTPRoute] --> GW[GatewayClass aws-alb / Gateway]
@@ -12,3 +13,10 @@ flowchart LR
   CT[CloudTrail] -->|KMS + S3| AUDIT[(Audit S3)]
   GD[GuardDuty] --> CT
   ARGO[Argo CD] -->|GitOps sync| APP[Workload namespaces]
+  ARGO -->|GitOps sync| MON[Monitoring namespace]
+  PROM[Prometheus] -->|30s ServiceMonitor scrape| SERV[Staging and production serving]
+  ALLOY[Alloy service account] -->|Namespaced Pod and pods/log reads| K8S
+  ALLOY -->|Bounded-label log stream| LOKI[Internal Loki]
+  GRAF[Grafana] -->|Local port-forward only| OP[Operator workstation]
+  GRAF -->|Read ConfigMaps in monitoring only| CFG[Dashboard ConfigMaps]
+  PROM -->|Metrics and alert evaluation| AM[Internal Alertmanager]

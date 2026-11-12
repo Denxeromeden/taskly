@@ -4,6 +4,7 @@ terraform {
     aws        = { source = "hashicorp/aws", version = "= 6.72.0" }
     helm       = { source = "hashicorp/helm", version = "= 3.3.0" }
     kubernetes = { source = "hashicorp/kubernetes", version = "= 3.4.0" }
+    random     = { source = "hashicorp/random", version = "= 3.9.1" }
     tls        = { source = "hashicorp/tls", version = "= 4.4.2" }
   }
   backend "s3" {}

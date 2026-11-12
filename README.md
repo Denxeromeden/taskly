@@ -98,7 +98,7 @@ curl -X POST http://localhost:8000/tasks \
   -H "Content-Type: application/json" \
   -d '{"title":"Write report","description":"Due Friday","priority":"medium"}'
 
-# list tasks (id from the response above)
+# list tasks
 curl http://localhost:8000/tasks
 
 # fetch, update, delete a single task
@@ -112,7 +112,7 @@ curl -w "%{http_code}\n" http://localhost:8000/tasks/1
 curl -w "%{http_code}\n" http://localhost:8000/tasks/999
 ```
 
-If you want to confirm the data is really persisted in Postgres and cached in Redis rather than
+If you want to confirm the data is really persisted in Postgres and Redis rather than
 held in memory:
 
 ```bash
@@ -122,12 +122,12 @@ docker compose exec redis redis-cli keys '*'
 
 ## Task-priority model
 
-`model/train.py` trains a trivial TF-IDF + logistic regression classifier that predicts a
-task's `priority` (low/medium/high) from its title + description, and logs it to MLflow. It's
-the starter kit for the MLFlowOps project option. Unlike the app itself, this part of the repo
-uses its own venv (see below) to keep the ML dependencies (`mlflow`, `pandas`, `scikit-learn`)
-out of the API's runtime image, and it is **not** part of `compose.yaml` — it's meant to be run
-from your host against the app's Postgres database.
+`model/train.py` trains a trivial TF-IDF + logistic regression classifier that predicts a task's
+`priority` (low/medium/high) from its title + description, and logs it to MLflow. It's the starter
+kit for the MLFlowOps project option. Unlike the app itself, this part of the repo uses its own
+venv (see below) to keep the ML dependencies (`mlflow`, `pandas`, `scikit-learn`) out of the API's
+runtime image, and it is **not** part of `compose.yaml` — it's meant to be run from your host
+against the app's Postgres database.
 
 Training reads directly from the app's Postgres `tasks` table — any task with a `priority` set
 (via the API/Swagger or the seed script below) becomes a training row. There's no separate
@@ -162,7 +162,7 @@ dataset file to keep in sync with the app.
    ```
 
 4. **Start a local MLflow tracking server** — this isn't part of `docker compose`, so run it
-   yourself, in another terminal, still inside `.venv-model`:
+yourself, in another terminal, still inside `.venv-model`:
    ```bash
    mlflow server --host 127.0.0.1 --port 5050 --backend-store-uri ./mlruns
    ```
@@ -181,26 +181,59 @@ dataset file to keep in sync with the app.
    noisier).
 
 6. **Verify the run landed in MLflow**: open http://127.0.0.1:5050 in a browser, find the
-   `task-priority-classifier` experiment, and confirm the run shows the logged params
-   (`train_rows`, `test_rows`, `model_type`), metrics (`accuracy`, `f1_macro`), and a registered
-   model version.
+   `task-priority-classifier` experiment, and confirm the logged params (`train_rows`, `test_rows`,
+   `model_type`), metrics (`accuracy`, `f1_macro`), and registered model version.
 
 If you run `train.py` before any labeled tasks exist, it fails fast with a clear error telling
-you to run `generate_data.py` or create tasks with a `priority` first, rather than crashing
-deep inside pandas/scikit-learn.
+you to run `generate_data.py` or create tasks with `priority` first, rather than crashing deep
+inside pandas/scikit-learn.
 
 ## MLOps on EKS
 
-The EKS/MLflow workload is operated separately from the local Docker Compose development path above. It uses the existing AWS infrastructure, MLflow tracking server, PostgreSQL databases, S3 artifact bucket, ECR repositories and Argo CD applications. See [`docs/workload-contract.yaml`](docs/workload-contract.yaml) for the workload interfaces and [`docs/runbooks/mlops-day2.md`](docs/runbooks/mlops-day2.md) for the operator procedure and acceptance checklist.
+The EKS/MLflow workload is operated separately from the local Docker Compose development path
+above. It uses the existing AWS infrastructure, MLflow tracking server, PostgreSQL databases,
+S3 artifact bucket, ECR repositories and Argo CD applications. See
+[`docs/workload-contract.yaml`](docs/workload-contract.yaml) for the workload interfaces and
+[`docs/runbooks/mlops-day2.md`](docs/runbooks/mlops-day2.md) for the operator procedure and
+acceptance checklist.
 
 ### Trigger a retraining run
 
-1. A push to `main` that changes image inputs publishes the three images, then starts `ML lifecycle` with that exact Git SHA. The workflow validates all three ECR tags, creates a Spot-only training Job, updates `@staging` only when the candidate is accepted, restarts the staging Deployment and runs the in-cluster staging smoke Job.
-2. `ML lifecycle` also runs daily at 02:00 UTC and can be dispatched manually from `main`. Those paths reuse the latest committed scanned image tag instead of rebuilding. Set `full_release: true` on a manual dispatch to request the protected production release after staging passes.
-3. Rejected candidates leave the staging alias and Deployment unchanged, and no production approval is requested. All training and promotion workflows share one concurrency group, so they never run in parallel.
+1. A push to `main` that changes image inputs publishes the three images, then starts `ML lifecycle`
+   with that exact Git SHA. The workflow validates all three ECR tags, creates a Spot-only training
+   Job, updates `@staging` only when the candidate is accepted, restarts the staging Deployment and
+   runs the in-cluster staging smoke Job.
+2. `ML lifecycle` also runs daily at 02:00 UTC and can be dispatched manually from `main`. Those
+   paths reuse the latest committed scanned image tag instead of rebuilding. Set `full_release: true`
+   on a manual dispatch to request the protected production release after staging passes.
+3. Rejected candidates leave the staging alias and Deployment unchanged, and no production approval
+   is requested. All training and promotion workflows share one concurrency group, so they never
+   run in parallel.
 
-`ML jobs` is now limited to `seed` (insert starter data only when no labeled rows exist) and `add-data` (append a normal or drifted synthetic batch). See the runbook for their inputs and details.
+`ML jobs` is now limited to `seed` (insert starter data only when no labeled rows exist) and
+`add-data` (append a normal or drifted synthetic batch). See the runbook for their inputs and details.
 
 ### Production promotion status
 
-Production promotion runs only through the protected `production` GitHub Environment in `ML lifecycle`; the approval happens after a successful staging smoke test. The Environment must require at least one reviewer, prevent self-review where GitHub supports it, restrict deployments to `main`, and disable administrator bypass. The promotion Job re-checks the candidate against the current production metric and sets `@production` to the exact version behind `@staging`. On the first release, the workflow enables the production Argo CD Application; later releases restart the production Deployment and verify the public prediction returns the approved model version. To restore an existing version, run the protected `Production rollback` workflow with its `model_version` input. Do not promote or roll back by manually changing the alias. The production Helm values and Gateway API templates remain inactive until the first approved release.
+Production promotion runs only through the protected `production` GitHub Environment in
+`ML lifecycle`; the approval happens after a successful staging smoke test. The Environment must
+require at least one reviewer, prevent self-review where GitHub supports it, restrict deployments
+to `main`, and disable administrator bypass. The promotion Job re-checks the candidate against the
+current production metric and sets `@production` to the exact version behind `@staging`. On the
+first release, the workflow enables the production Argo CD Application; later releases restart the
+production Deployment and verify the public prediction returns the approved model version. To
+restore an existing version, run the protected `Production rollback` workflow with its
+`model_version` input. Do not promote or roll back by manually changing the alias. The production
+Helm values and Gateway API templates remain inactive until the first approved release.
+
+### Monitoring and workload logs
+
+The internal monitoring stack is deployed by the Argo CD `monitoring` Application into the existing
+`monitoring` namespace. It includes Prometheus, Alertmanager, Grafana, Loki, Alloy and Pushgateway.
+The `MLFlowOps Overview` dashboard shows serving traffic, error rate, p95 latency, loaded model
+versions, deployment health, drift metrics and workload logs. Grafana is accessed with a local
+`kubectl port-forward`; no monitoring UI or metrics endpoint is exposed through the public Gateway.
+
+See [`docs/runbooks/monitoring.md`](docs/runbooks/monitoring.md) for Grafana access, Prometheus
+and Alertmanager checks, Loki queries, the alert catalogue, log-collection permissions and storage
+retention details.
