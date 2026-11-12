@@ -49,6 +49,11 @@ kube-prometheus-stack:
         label: grafana_dashboard
         labelValue: "1"
         searchNamespace: monitoring
+        resource: configmap
+      datasources:
+        enabled: true
+        searchNamespace: monitoring
+        resource: configmap
     additionalDataSources:
       - name: Loki
         uid: loki
