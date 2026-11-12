@@ -225,7 +225,18 @@ resource "helm_release" "argocd" {
     global        = { nodeSelector = { workload = "base" } }
     dex           = { enabled = false }
     notifications = { enabled = false }
-    controller    = { resources = { requests = { cpu = "100m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } } }
+    controller = {
+      resources = {
+        requests = {
+          cpu    = "100m"
+          memory = "512Mi"
+        }
+        limits = {
+          cpu    = "500m"
+          memory = "1Gi"
+        }
+      }
+    }
     server = {
       service   = { type = "ClusterIP" }
       resources = { requests = { cpu = "50m", memory = "128Mi" }, limits = { cpu = "250m", memory = "256Mi" } }
