@@ -1,6 +1,30 @@
-# One service account per Job type. None of these Jobs needs the Kubernetes API
-# or an AWS identity, so token mounting stays disabled on all three.
 serviceAccounts:
   - seed
   - add-data
   - training
+  - drift
+
+image:
+  repository: ""
+  tag: ""
+
+region: ""
+artifactsBucket: ""
+mlflowTrackingUri: http://mlflow.mlflow.svc.cluster.local:5000
+modelName: task-priority-classifier
+
+drift:
+  enabled: true
+  suspend: true
+  schedule: "0 */6 * * *"
+  pushgatewayUrl: http://monitoring-pushgateway.monitoring.svc.cluster.local:9091
+  currentWindowSize: 200
+  minimumWindowSize: 50
+  referenceWindowLimit: 2000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

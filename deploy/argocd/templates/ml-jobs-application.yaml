@@ -13,6 +13,18 @@ spec:
     path: deploy/charts/ml-jobs
     helm:
       releaseName: ml-jobs
+      valueFiles:
+        - values-image.yaml
+      parameters:
+        - name: image.repository
+          value: {{ regexReplaceAll "/mlflow$" (required "mlflowImageRepository is required" .Values.mlflowImageRepository) "/ml-jobs" | quote }}
+          forceString: true
+        - name: artifactsBucket
+          value: {{ required "mlflowArtifactsBucket is required" .Values.mlflowArtifactsBucket | quote }}
+          forceString: true
+        - name: region
+          value: {{ required "mlflowRegion is required" .Values.mlflowRegion | quote }}
+          forceString: true
   destination:
     server: https://kubernetes.default.svc
     namespace: ml-jobs

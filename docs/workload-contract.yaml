@@ -4,17 +4,17 @@ model:
   experiment: task-priority-classifier
   registered_name: task-priority-classifier
   input:
-  - title
-  - description
+    - title
+    - description
   output_classes:
-  - low
-  - medium
-  - high
+    - low
+    - medium
+    - high
   promotion_metric: f1_macro
   promotion_rule: candidate_greater_than_or_equal_to_production
   aliases:
-  - staging
-  - production
+    - staging
+    - production
   training_script: model/train.py
   training_script_mutable: false
 mlflow:
@@ -36,12 +36,46 @@ jobs:
   database_secret: tasks-db-credentials
   tracking_uri: http://mlflow.mlflow.svc.cluster.local:5000
   service_accounts_without_aws_identity:
-  - seed
-  - add-data
-  - training
+    - seed
+    - add-data
+    - training
+  service_accounts_with_aws_identity:
+    - drift
   training_node_selector:
     workload: training
   training_toleration: workload=training:NoSchedule
+  drift:
+    service_account: drift
+    pod_identity_role: terraform.modules.identity.drift
+    database_access: read_only_select
+    model_name: task-priority-classifier
+    model_alias: production
+    reference_window_limit: 2000
+    current_window_size: 200
+    minimum_window_size: 50
+    feature_columns:
+      - title_characters
+      - title_words
+      - description_words
+      - combined_characters
+      - priority
+      - predicted_priority
+    evidently:
+      version: 0.7.23
+      method: psi
+      per_feature_threshold: 0.1
+      drift_share_threshold: 0.3
+    report:
+      bucket: foundation_contract.infra.artifacts_bucket_name
+      prefix: drift-reports/
+      content: aggregate_only
+    pushgateway:
+      url: http://monitoring-pushgateway.monitoring.svc.cluster.local:9091
+      group: job=taskly-drift-detection
+      stable_group_replacement: true
+    schedule: "0 */6 * * *"
+    concurrency_policy: Forbid
+    initially_suspended: true
 serving:
   image_repository: mlflowops/serving
   container_port: 8000
@@ -117,51 +151,52 @@ monitoring:
       storage_size: 2Gi
   log_collection:
     namespaces:
-    - mlflow
-    - ml-jobs
-    - staging
-    - production
-    - monitoring
+      - mlflow
+      - ml-jobs
+      - staging
+      - production
+      - monitoring
     retained_labels:
-    - namespace
-    - app
-    - container
-    - level
+      - namespace
+      - app
+      - container
+      - level
     secret_access: false
     host_log_mounts: false
     service_account: monitoring-alloy
     rbac:
       pods:
-      - get
-      - list
-      - watch
+        - get
+        - list
+        - watch
       pods_log:
-      - get
+        - get
       secret_access: false
       workload_write_access: false
   drift_metrics:
     pushgateway_group:
       job: taskly-drift-detection
     labels_must_not_include:
-    - pod
-    - run_uuid
-    - task_id
-    - timestamp
+      - pod
+      - run_uuid
+      - task_id
+      - timestamp
     names:
-    - taskly_drift_detected
-    - taskly_drift_score
-    - taskly_drift_last_run_timestamp_seconds
-    - taskly_drift_last_success_timestamp_seconds
-    - taskly_drift_reference_rows
-    - taskly_drift_current_rows
-    - taskly_drift_report_upload_success
+      - taskly_drift_detected
+      - taskly_drift_score
+      - taskly_drift_last_run_timestamp_seconds
+      - taskly_drift_last_success_timestamp_seconds
+      - taskly_drift_reference_rows
+      - taskly_drift_current_rows
+      - taskly_drift_report_upload_success
+      - taskly_drift_run_status
   alerts:
-  - ServingHighPredictionErrorRate
-  - ServingDeploymentUnavailable
-  - ServingPodCrashLooping
-  - ServingContainerOOMKilled
-  - DriftDetected
-  - DriftJobStale
-  - DriftPushgatewayUnavailable
+    - ServingHighPredictionErrorRate
+    - ServingDeploymentUnavailable
+    - ServingPodCrashLooping
+    - ServingContainerOOMKilled
+    - DriftDetected
+    - DriftJobStale
+    - DriftPushgatewayUnavailable
   grafana_access: kubectl_port_forward_only
   retention_days: 7

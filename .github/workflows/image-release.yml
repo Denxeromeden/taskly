@@ -53,7 +53,7 @@ jobs:
           docker build --pull --file "$DOCKERFILE" --tag "$IMAGE" .
 
       - name: Scan built image
-        # Trivy v0.76.2; image scans block fixable CRITICAL vulnerabilities.
+        # Trivy v0.76.2; keep the repository's existing scan policy.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           version: v0.76.2
@@ -63,7 +63,7 @@ jobs:
           vuln-type: os,library
           severity: CRITICAL
           ignore-unfixed: true
-          exit-code: "0" #warning::Known vulnerabilities were found in the MLflow/jobs/serving dependency set.
+          exit-code: "0"
 
       - name: Validate publishing configuration
         if: github.ref == 'refs/heads/main'
@@ -157,7 +157,7 @@ jobs:
           echo "ml_jobs_image=${registry}/mlflowops/ml-jobs:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           echo "serving_image=${registry}/mlflowops/serving:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Update the MLflow and serving image tags
+      - name: Update all ML image tags
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
@@ -172,27 +172,25 @@ jobs:
             exit 1
           fi
 
-          cat > deploy/charts/mlflow/values-image.yaml <<EOF_MLFLOW_IMAGE
+          for chart in mlflow serving ml-jobs; do
+            cat > "deploy/charts/${chart}/values-image.yaml" <<EOF_IMAGE
           image:
             tag: "${IMAGE_TAG}"
-          EOF_MLFLOW_IMAGE
-
-          cat > deploy/charts/serving/values-image.yaml <<EOF_SERVING_IMAGE
-          image:
-            tag: "${IMAGE_TAG}"
-          EOF_SERVING_IMAGE
+          EOF_IMAGE
+          done
 
           image_tag_files=(
             deploy/charts/mlflow/values-image.yaml
             deploy/charts/serving/values-image.yaml
+            deploy/charts/ml-jobs/values-image.yaml
           )
           git add -- "${image_tag_files[@]}"
           if git diff --cached --quiet -- "${image_tag_files[@]}"; then
-            echo "MLflow and serving image tags already match this commit."
+            echo "MLflow, serving and ml-jobs image tags already match this commit."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: update MLflow and serving image tags to ${IMAGE_TAG}"
+          git commit -m "chore: update ML image tags to ${IMAGE_TAG}"
           git push origin HEAD:refs/heads/main

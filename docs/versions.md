@@ -33,6 +33,8 @@ Workload-layer pins were resolved on **2026-11-10** and smoke-tested on Python 3
 | SQLAlchemy (tracking server and ml-jobs images) | 2.0.57 | Latest 2.0.x on PyPI; 2.1 removes `sqlalchemy.pool.FallbackAsyncAdaptedQueuePool`, which mlflow 2.22.5 imports at startup |
 | psycopg2-binary (tracking server and ml-jobs images) | 2.9.13 | Latest on PyPI 2026-11-10; cp312 manylinux wheel published |
 | boto3 (tracking server image) | 1.43.127 | Latest on PyPI 2026-11-10; py3-none-any wheel published |
+| boto3 (ml-jobs drift reports) | 1.43.127 | Exact pin used to upload aggregate reports to the existing S3 drift-reports/ prefix |
+| Evidently (ml-jobs drift detection) | 0.7.23 | Exact pin; `DataDriftPreset` PSI API used for aggregate feature drift |
 | scikit-learn (shared ML runtime) | 1.9.1 | Latest on PyPI 2026-11-10; satisfies `scikit-learn>=1.3`. Pinned in `constraints/ml-runtime.txt` |
 | pandas (shared ML runtime) | 2.3.3 | Resolved 2026-11-10 for Python 3.12; satisfies `pandas>=2.0` |
 | NumPy (shared ML runtime) | 2.5.4 | Resolved 2026-11-10 alongside scikit-learn 1.9.1 |
@@ -59,6 +61,10 @@ artifact through a proxied tracking server. The ml-jobs and serving images insta
 `mlflow-skinny` instead of the full `mlflow` package: 784 MB with the git CLI versus 1.05 GB with
 the server stack, which is sufficient because both only talk to the tracking server over HTTP.
 
+The drift-only dependencies are pinned separately in `jobs/requirements-drift.txt` and installed
+in the ml-jobs image with the shared ML runtime constraints. This keeps Evidently and boto3 out of
+the serving image and preserves the training/serving versions of pandas, NumPy and scikit-learn.
+
 The Taskly API and serving framework pins were refreshed on **2026-11-11** together: FastAPI
 0.162.4, Starlette 1.7.0 and Pydantic 2.14.3 match FastAPI's upstream dependency lock. Starlette
 1.7.0 is beyond the highest reported fix version in the audit output (1.3.1). Keep these exact
@@ -67,14 +73,16 @@ pins aligned in both `requirements.txt` and `serving/requirements.txt`.
 The monitoring chart pins are declared directly in `deploy/charts/monitoring/Chart.yaml` and
 locked in `deploy/charts/monitoring/Chart.lock`. The Prometheus Operator's bundled subcharts are
 versioned by the pinned kube-prometheus-stack release. Loki uses its monolithic filesystem mode
-with a persistent `gp3` volume; Alloy uses Kubernetes API Pod discovery and `pods/log` reads with
-namespace-scoped RBAC; Pushgateway stores its stable metric group on a 2 GiB `gp3` volume and exposes one stable ServiceMonitor target. The monitoring chart
-is built and rendered by `.github/workflows/monitoring-validation.yml`.
+with a persistent gp3 volume; Alloy uses Kubernetes API Pod discovery and `pods/log` reads with
+namespace-scoped RBAC; Pushgateway stores its stable metric group on a 2 GiB gp3 volume and exposes
+one stable ServiceMonitor target. The monitoring chart is built and rendered by
+`.github/workflows/monitoring-validation.yml`.
 
-Karpenter EC2NodeClass uses the design-approved `al2023@latest` alias. The exact AMI resolved by AWS
-is therefore a runtime value and must be recorded in the deployment evidence after the first apply.
-EKS managed add-ons use `most_recent = true` at cluster creation; capture the resolved versions with
-`aws eks describe-addon-versions` / `aws eks describe-addon` and add them below after deployment.
+Karpenter EC2NodeClass uses the design-approved `al2023@latest` alias. The exact AMI resolved by
+AWS is therefore a runtime value and must be recorded in the deployment evidence after the first
+apply. EKS managed add-ons use `most_recent = true` at cluster creation; capture the resolved
+versions with `aws eks describe-addon-versions` / `aws eks describe-addon` and add them below after
+deployment.
 
 ## Official sources checked
 
@@ -98,6 +106,7 @@ EKS managed add-ons use `most_recent = true` at cluster creation; capture the re
 - SQLAlchemy: https://pypi.org/project/SQLAlchemy/2.0.57/
 - psycopg2-binary: https://pypi.org/project/psycopg2-binary/2.9.13/
 - boto3: https://pypi.org/project/boto3/1.43.127/
+- Evidently: https://pypi.org/project/evidently/0.7.23/
 - scikit-learn: https://pypi.org/project/scikit-learn/1.9.1/
 - pandas: https://pypi.org/project/pandas/2.3.3/
 - NumPy: https://pypi.org/project/numpy/2.5.4/

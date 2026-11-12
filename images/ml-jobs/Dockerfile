@@ -11,12 +11,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/tmp
 
-# Non-root runtime identity; no writable home directory is created.
 RUN groupadd --gid 10001 mljobs \
  && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin mljobs
 
-# MLflow's client shells out to git when it records run metadata; without it
-# every run logs a "Failed to import Git" warning.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git \
  && apt-get clean \
@@ -24,23 +21,21 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Dependencies first so source changes do not invalidate the install layer.
-# The constraint file is what keeps the training and serving ML runtime identical.
 COPY constraints/ml-runtime.txt /tmp/ml-runtime.txt
 COPY model/requirements.txt /tmp/model-requirements.txt
+COPY jobs/requirements-drift.txt /tmp/drift-requirements.txt
 RUN pip install --no-cache-dir --no-compile \
       -r /tmp/model-requirements.txt \
       -c /tmp/ml-runtime.txt \
+ && pip install --no-cache-dir --no-compile \
+      -r /tmp/drift-requirements.txt \
+      -c /tmp/ml-runtime.txt \
  && pip check \
- && rm -f /tmp/model-requirements.txt /tmp/ml-runtime.txt
+ && rm -f /tmp/model-requirements.txt /tmp/drift-requirements.txt /tmp/ml-runtime.txt
 
-# Job commands use these paths relative to /app, as they do in a local checkout.
 COPY --chown=10001:10001 model/train.py model/generate_data.py model/simulate_data.py /app/model/
-COPY --chown=10001:10001 jobs/entrypoint.py /app/jobs/entrypoint.py
-COPY --chown=10001:10001 jobs/promote.py /app/jobs/promote.py
-COPY --chown=10001:10001 jobs/promote_production.py /app/jobs/promote_production.py
-COPY --chown=10001:10001 jobs/rollback_production.py /app/jobs/rollback_production.py
-COPY --chown=10001:10001 jobs/smoke_staging.py /app/jobs/smoke_staging.py
-COPY --chown=10001:10001 jobs/verify_production.py /app/jobs/verify_production.py
+COPY --chown=10001:10001 jobs/entrypoint.py jobs/promote.py jobs/promote_production.py \
+     jobs/rollback_production.py jobs/smoke_staging.py jobs/verify_production.py \
+     jobs/drift.py /app/jobs/
 
 USER 10001:10001
