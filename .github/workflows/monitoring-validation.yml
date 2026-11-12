@@ -56,6 +56,10 @@ jobs:
             echo "Monitoring must remain internal; a public route or Service type was rendered."
             exit 1
           fi
+          if grep -Eq '^  namespace: kube-system$' /tmp/monitoring-rendered.yaml; then
+            echo "Monitoring must not render namespaced resources into kube-system."
+            exit 1
+          fi
 
       - name: Render root Application and platform AppProjects
         run: |

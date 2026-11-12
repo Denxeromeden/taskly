@@ -19,3 +19,4 @@ backend.hcl
 build/
 dist/
 evidence/
+*.tgz

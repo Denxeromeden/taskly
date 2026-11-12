@@ -230,12 +230,64 @@ resource "helm_release" "argocd" {
       service   = { type = "ClusterIP" }
       resources = { requests = { cpu = "50m", memory = "128Mi" }, limits = { cpu = "250m", memory = "256Mi" } }
     }
-    repoServer = { resources = { requests = { cpu = "50m", memory = "128Mi" }, limits = { cpu = "250m", memory = "256Mi" } } }
+    repoServer = {
+      resources = {
+        requests = { cpu = "50m", memory = "512Mi" }
+        limits   = { cpu = "250m", memory = "1Gi" }
+      }
+    }
     applicationSet = {
       enabled   = true
       resources = { requests = { cpu = "25m", memory = "64Mi" }, limits = { cpu = "150m", memory = "128Mi" } }
     }
-    configs = { params = { "server.insecure" = true } }
+    configs = {
+      params = {
+        "server.insecure"              = true
+        "reposerver.parallelism.limit" = "1"
+      }
+      cm = {
+        "resource.customizations.health.argoproj.io_Application" = <<-LUA
+          hs = {}
+          hs.status = "Progressing"
+          hs.message = "Waiting for child Application to synchronize"
+
+          if obj.status == nil then
+            return hs
+          end
+
+          if obj.status.conditions ~= nil then
+            for _, condition in ipairs(obj.status.conditions) do
+              if condition.type == "ComparisonError"
+                or condition.type == "InvalidSpecError"
+                or condition.type == "SyncError" then
+                hs.status = "Degraded"
+                hs.message = condition.message or condition.type
+                return hs
+              end
+            end
+          end
+
+          if obj.status.operationState ~= nil then
+            local phase = obj.status.operationState.phase
+            if phase == "Error" or phase == "Failed" then
+              hs.status = "Degraded"
+              hs.message = obj.status.operationState.message or phase
+              return hs
+            end
+          end
+
+          if obj.status.sync == nil or obj.status.sync.status ~= "Synced" then
+            return hs
+          end
+
+          if obj.status.health ~= nil then
+            hs.status = obj.status.health.status or "Progressing"
+            hs.message = obj.status.health.message or ""
+          end
+          return hs
+        LUA
+      }
+    }
   })]
   depends_on = [helm_release.platform_base]
 }

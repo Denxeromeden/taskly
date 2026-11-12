@@ -103,7 +103,8 @@ kube-prometheus-stack:
     enabled: false
   kubeProxy:
     enabled: false
-
+  coreDns:
+    enabled: false
   kubelet:
     namespace: monitoring
 
