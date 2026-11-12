@@ -193,7 +193,9 @@ loki:
   gateway:
     enabled: false
   lokiCanary:
-    enabled: false
+    enabled: true
+    kind: Deployment
+    push: true
   chunksCache:
     enabled: false
   resultsCache:
