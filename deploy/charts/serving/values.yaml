@@ -69,5 +69,7 @@ networkPolicy:
   # Populate from `terraform -chdir=terraform/infra output -json public_subnet_cidrs`.
   # These must be the ALB public-subnet CIDRs, not the ALB's client source ranges.
   publicSubnetCidrs: []
+  # Allow only the labelled staging-smoke Job in ml-jobs to reach staging.
+  allowStagingSmoke: true
   # Enable only after the Day 3 monitoring workloads are deployed.
   allowMonitoring: false

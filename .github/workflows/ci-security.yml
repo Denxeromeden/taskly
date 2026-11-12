@@ -339,6 +339,14 @@ jobs:
             --values deploy/charts/serving/values-staging.yaml \
             --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
             --set-string image.tag=ci >/dev/null
+          # Render again with monitoring enabled so the optional monitoring rule
+          # and the selector-scoped staging-smoke rule are both exercised.
+          helm template ci-monitored deploy/charts/serving \
+            --namespace staging \
+            --values deploy/charts/serving/values-staging.yaml \
+            --set-string image.repository=ci-registry-placeholder/mlflowops/serving \
+            --set-string image.tag=ci \
+            --set networkPolicy.allowMonitoring=true >/dev/null
 
       - name: Lint and render production serving chart
         run: |

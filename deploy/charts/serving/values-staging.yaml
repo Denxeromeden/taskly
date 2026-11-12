@@ -11,4 +11,5 @@ gateway:
   enabled: false
 
 networkPolicy:
+  allowStagingSmoke: true
   allowMonitoring: false
