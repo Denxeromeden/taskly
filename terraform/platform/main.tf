@@ -203,11 +203,11 @@ resource "helm_release" "platform_base" {
   wait      = true
   atomic    = true
   values = [yamlencode({
-    region                  = var.region
-    artifactsBucket         = local.infra.artifacts_bucket_name
-    rdsMasterSecretArn      = local.infra.rds_master_secret_arn
-    rdsMlflowSecretName     = "mlflowops/rds/mlflow"
-    rdsTasksSecretName      = "mlflowops/rds/tasks"
+    region                 = var.region
+    artifactsBucket        = local.infra.artifacts_bucket_name
+    rdsMasterSecretArn     = local.infra.rds_master_secret_arn
+    rdsMlflowSecretName    = "mlflowops/rds/mlflow"
+    rdsTasksSecretName     = "mlflowops/rds/tasks"
     terraformChartChecksum = local.platform_base_chart_checksum
   })]
   depends_on = [helm_release.external_secrets, helm_release.load_balancer_controller]
