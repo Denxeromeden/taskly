@@ -38,6 +38,7 @@ RUN pip install --no-cache-dir --no-compile \
 COPY --chown=10001:10001 model/train.py model/generate_data.py model/simulate_data.py /app/model/
 COPY --chown=10001:10001 jobs/entrypoint.py /app/jobs/entrypoint.py
 COPY --chown=10001:10001 jobs/promote.py /app/jobs/promote.py
+COPY --chown=10001:10001 jobs/promote_production.py /app/jobs/promote_production.py
 COPY --chown=10001:10001 jobs/smoke_staging.py /app/jobs/smoke_staging.py
 
 USER 10001:10001

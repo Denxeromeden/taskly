@@ -5,9 +5,10 @@ the GitHub Actions workflow. It is deliberately outside `deploy/argocd` and the
 persistent Helm chart source paths, so Argo CD pruning cannot remove a running
 or completed workflow Job.
 
-The templates are `seed.yaml`, `add-data.yaml`, `train.yaml`, `promote.yaml` and
-`staging-smoke.yaml`. The workflow substitutes the unique Job name and immutable
-ML jobs image tag, then creates each Job with `kubectl create -f -`.
+The templates are `seed.yaml`, `add-data.yaml`, `train.yaml`, `promote.yaml`,
+`promote-production.yaml` and `staging-smoke.yaml`. The workflow substitutes the
+unique Job name and immutable ML jobs image tag, then creates each Job with
+`kubectl create -f -`.
 
 The workflow must:
 
@@ -36,6 +37,15 @@ NetworkPolicy allows only pods labelled `app.kubernetes.io/name=staging-smoke`
 from the `ml-jobs` namespace, so the check needs no `pods/exec` or
 `pods/portforward` access. A failed smoke Job must stop the staging phase before
 any production approval.
+
+`promote-production.yaml` runs `jobs/promote_production.py` only after the
+protected `production` GitHub Environment approves the release. It resolves the
+concrete version behind `@staging`, re-reads `f1_macro` for that version and the
+current `@production` version, and moves `@production` only when the candidate
+still matches or exceeds production. Missing metrics fail closed, a lower score
+leaves both aliases unchanged, and a repeat run on the same version is a
+successful no-op. The Job uses the `training` service account and never reads
+Secrets or task text.
 
 Do not write a concrete MLflow model version into a Helm values file or
 Deployment manifest; the serving process resolves the configured model alias

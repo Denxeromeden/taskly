@@ -502,7 +502,7 @@ jobs:
 
           template="jobs/manifests/promote-production.yaml"
           if [[ ! -f "$template" ]]; then
-            echo "::error::${template} is missing; the production promotion operation (section 5.5) has not been implemented yet." >&2
+            echo "::error::${template} is missing from the checked-out commit; cannot promote production." >&2
             exit 1
           fi
 
