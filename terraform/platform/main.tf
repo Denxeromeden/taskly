@@ -22,8 +22,8 @@ locals {
   # The Helm provider does not detect edits to files inside a local chart path.
   # Feed a content hash as a no-op chart value so Terraform plans an in-place upgrade.
   platform_base_chart_files = sort(distinct(concat(
-    fileset(local.platform_base_chart_path, "*"),
-    fileset(local.platform_base_chart_path, "**/*")
+    tolist(fileset(local.platform_base_chart_path, "*")),
+    tolist(fileset(local.platform_base_chart_path, "**/*"))
   )))
   platform_base_chart_checksum = sha256(join("\n", [
     for file in local.platform_base_chart_files :
