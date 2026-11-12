@@ -1,0 +1,337 @@
+name: Production rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_version:
+        description: Existing registered model version to restore into @production
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize with training/promotion so an alias change cannot race a release.
+  group: taskly-mlflow-training
+  cancel-in-progress: false
+
+env:
+  MLFLOW_TRACKING_URI: http://mlflow.mlflow.svc.cluster.local:5000
+  MODEL_NAME: task-priority-classifier
+
+jobs:
+  rollback:
+    name: Protected production rollback
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Allow for the rollback Job, Deployment rollout, Gateway address
+    # publication and public verification.
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out main
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate the requested model version
+        shell: bash
+        env:
+          MODEL_VERSION: ${{ inputs.model_version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "This workflow must be dispatched from main; AWS OIDC is restricted to that ref." >&2
+            exit 1
+          fi
+          if [[ ! "$MODEL_VERSION" =~ ^[1-9][0-9]*$ ]]; then
+            echo "model_version must be a positive integer." >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials through the production Environment
+        # The OIDC trust policy contains the environment:production subject; this
+        # step only runs after the reviewer gate approves the deployment.
+        # aws-actions/configure-aws-credentials v6.3.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: taskly-production-rollback-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Configure kubectl for the existing EKS cluster
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name mlflowops-demo --region "$AWS_REGION" >/dev/null
+
+      - name: Resolve the immutable ml-jobs image
+        id: image
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          [[ -n "$AWS_REGION" ]] || { echo "Repository variable AWS_REGION is required." >&2; exit 1; }
+
+          image_tag="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+
+          def read_tag(path: str) -> str:
+              values = Path(path).read_text(encoding="utf-8")
+              tags = re.findall(r"(?m)^[ ]{2}tag:[ ]*[\"']?([0-9a-f]{40})[\"']?[ ]*$", values)
+              if len(tags) != 1:
+                  raise SystemExit(
+                      f"{path} must contain exactly one full Git-SHA tag from a successful main image build"
+                  )
+              return tags[0]
+
+
+          mlflow_tag = read_tag("deploy/charts/mlflow/values-image.yaml")
+          serving_tag = read_tag("deploy/charts/serving/values-image.yaml")
+          if mlflow_tag != serving_tag:
+              raise SystemExit(
+                  "MLflow and serving image tag files disagree; refusing to reuse an ambiguous image set"
+              )
+          print(mlflow_tag)
+          PY
+          )"
+
+          if [[ ! "$image_tag" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected a full 40-character Git SHA image tag, got '${image_tag}'." >&2
+            exit 1
+          fi
+
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo "Could not resolve AWS account ID." >&2; exit 1; }
+          registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "::add-mask::$account_id"
+          echo "::add-mask::$registry"
+
+          aws ecr describe-images \
+            --region "$AWS_REGION" \
+            --repository-name mlflowops/ml-jobs \
+            --image-ids "imageTag=${image_tag}" \
+            >/dev/null
+
+          printf 'image_tag=%s\n' "$image_tag" >> "$GITHUB_OUTPUT"
+          printf 'ml_jobs_image=%s\n' "${registry}/mlflowops/ml-jobs:${image_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and wait for the production rollback Job
+        id: rollback
+        shell: bash
+        env:
+          ML_JOBS_IMAGE: ${{ steps.image.outputs.ml_jobs_image }}
+          MODEL_VERSION: ${{ inputs.model_version }}
+        run: |
+          set -euo pipefail
+
+          template="jobs/manifests/production-rollback.yaml"
+          if [[ ! -f "$template" ]]; then
+            echo "::error::${template} is missing from the checked-out commit; cannot roll back production." >&2
+            exit 1
+          fi
+
+          run_name="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          job_name="production-rollback-${run_name}"
+          export JOB_NAME="$job_name"
+          export ML_JOBS_IMAGE
+          export MODEL_VERSION
+          python3 - "$template" <<'PY' | kubectl -n ml-jobs create -f -
+          from pathlib import Path
+          import os
+          import re
+          import sys
+
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          required = {"JOB_NAME", "ML_JOBS_IMAGE", "MODEL_VERSION"}
+
+          def replace(match):
+              name = match.group(1)
+              if name not in required:
+                  raise SystemExit(f"unexpected template variable: {name}")
+              value = os.environ.get(name, "")
+              if not value:
+                  raise SystemExit(f"missing or empty template variable: {name}")
+              return value
+
+          rendered = re.sub(r"\$\{([A-Z_]+)\}", replace, source)
+          if re.search(r"\$\{[A-Z_]+\}", rendered):
+              raise SystemExit("unresolved Job template variable")
+          sys.stdout.write(rendered)
+          PY
+
+          deadline=$(( $(date +%s) + 360 ))
+          while (( $(date +%s) < deadline )); do
+            job_json="$(kubectl -n ml-jobs get job "$job_name" -o json)"
+            succeeded="$(jq -r '.status.succeeded // 0' <<< "$job_json")"
+            failed="$(jq -r 'any(.status.conditions[]?; .type == "Failed" and .status == "True")' <<< "$job_json")"
+            if (( succeeded >= 1 )); then
+              rollback_logs="$(kubectl -n ml-jobs logs "job/${job_name}" --all-containers=true --prefix)"
+              printf '%s\n' "$rollback_logs"
+
+              new_production_version="$(grep -Eo 'new_production_version=[0-9]+' <<< "$rollback_logs" | tail -n1 | cut -d= -f2 || true)"
+              old_production_version="$(grep -Eo 'old_production_version=([0-9]+|none)' <<< "$rollback_logs" | tail -n1 | cut -d= -f2 || true)"
+              if [[ ! "$new_production_version" =~ ^[0-9]+$ ]]; then
+                echo "Could not read the rollback model version from the Job logs." >&2
+                exit 1
+              fi
+              if [[ ! "$old_production_version" =~ ^([0-9]+|none)$ ]]; then
+                echo "Could not read the previous production version from the Job logs." >&2
+                exit 1
+              fi
+
+              printf 'new_production_version=%s\n' "$new_production_version" >> "$GITHUB_OUTPUT"
+              printf 'old_production_version=%s\n' "$old_production_version" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [[ "$failed" == "true" ]]; then
+              kubectl -n ml-jobs get pods -l "job-name=${job_name}" -o wide || true
+              kubectl -n ml-jobs logs "job/${job_name}" --all-containers=true --prefix || true
+              kubectl -n ml-jobs describe job "$job_name" || true
+              echo "Production rollback Job ${job_name} failed." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          kubectl -n ml-jobs describe job "$job_name" || true
+          echo "Timed out waiting for production rollback Job ${job_name}." >&2
+          exit 1
+
+      - name: Restart production and verify the public model version
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
+          ML_JOBS_IMAGE: ${{ steps.image.outputs.ml_jobs_image }}
+          NEW_PRODUCTION_VERSION: ${{ steps.rollback.outputs.new_production_version }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$NEW_PRODUCTION_VERSION" =~ ^[0-9]+$ ]]; then
+            echo "No rollback model version was recorded." >&2
+            exit 1
+          fi
+
+          kubectl -n production rollout restart deployment/serving-api
+          kubectl -n production rollout status deployment/serving-api --timeout=600s
+
+          image="$(kubectl -n production get deployment serving-api -o jsonpath='{.spec.template.spec.containers[0].image}')"
+          if [[ "$image" != *":${IMAGE_TAG}" ]]; then
+            echo "Production Deployment uses ${image}, not the committed tag ${IMAGE_TAG}." >&2
+            exit 1
+          fi
+
+          deadline=$(( $(date +%s) + 600 ))
+          gateway_host=""
+          while (( $(date +%s) < deadline )); do
+            gateway_host="$(kubectl -n production get gateway serving-public -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)"
+            if [[ -n "$gateway_host" ]]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [[ -z "$gateway_host" ]]; then
+            echo "Production Gateway serving-public has no address after 10 minutes." >&2
+            kubectl -n production get gateway serving-public -o yaml || true
+            exit 1
+          fi
+          serving_base_url="https://${gateway_host}"
+          echo "Production Gateway address: ${serving_base_url}"
+
+          template="jobs/manifests/production-verify.yaml"
+          if [[ ! -f "$template" ]]; then
+            echo "::error::${template} is missing from the checked-out commit; cannot verify production." >&2
+            exit 1
+          fi
+
+          run_name="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          verify_job="production-verify-${run_name}"
+          export JOB_NAME="$verify_job"
+          export ML_JOBS_IMAGE
+          export SERVING_BASE_URL="$serving_base_url"
+          export EXPECTED_MODEL_VERSION="$NEW_PRODUCTION_VERSION"
+          python3 - "$template" <<'PY' | kubectl -n ml-jobs create -f -
+          from pathlib import Path
+          import os
+          import re
+          import sys
+
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          required = {
+              "EXPECTED_MODEL_VERSION",
+              "JOB_NAME",
+              "ML_JOBS_IMAGE",
+              "SERVING_BASE_URL",
+          }
+
+          def replace(match):
+              name = match.group(1)
+              if name not in required:
+                  raise SystemExit(f"unexpected template variable: {name}")
+              value = os.environ.get(name, "")
+              if not value:
+                  raise SystemExit(f"missing or empty template variable: {name}")
+              return value
+
+          rendered = re.sub(r"\$\{([A-Z_]+)\}", replace, source)
+          if re.search(r"\$\{[A-Z_]+\}", rendered):
+              raise SystemExit("unresolved Job template variable")
+          sys.stdout.write(rendered)
+          PY
+
+          deadline=$(( $(date +%s) + 240 ))
+          while (( $(date +%s) < deadline )); do
+            job_json="$(kubectl -n ml-jobs get job "$verify_job" -o json)"
+            succeeded="$(jq -r '.status.succeeded // 0' <<< "$job_json")"
+            failed="$(jq -r 'any(.status.conditions[]?; .type == "Failed" and .status == "True")' <<< "$job_json")"
+            if (( succeeded >= 1 )); then
+              kubectl -n ml-jobs logs "job/${verify_job}" --all-containers=true --prefix
+              exit 0
+            fi
+            if [[ "$failed" == "true" ]]; then
+              kubectl -n ml-jobs get pods -l "job-name=${verify_job}" -o wide || true
+              kubectl -n ml-jobs logs "job/${verify_job}" --all-containers=true --prefix || true
+              kubectl -n ml-jobs describe job "$verify_job" || true
+              echo "Production verification Job ${verify_job} failed." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          kubectl -n ml-jobs describe job "$verify_job" || true
+          echo "Timed out waiting for production verification Job ${verify_job}." >&2
+          exit 1
+
+      - name: Record the rollback result
+        if: always()
+        shell: bash
+        env:
+          MODEL_VERSION: ${{ inputs.model_version }}
+          OLD_PRODUCTION_VERSION: ${{ steps.rollback.outputs.old_production_version }}
+          NEW_PRODUCTION_VERSION: ${{ steps.rollback.outputs.new_production_version }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Production rollback"
+            echo
+            echo "- Requested version: \`${MODEL_VERSION}\`"
+            echo "- Previous production version: \`${OLD_PRODUCTION_VERSION:-unknown}\`"
+            echo "- New production version: \`${NEW_PRODUCTION_VERSION:-unknown}\`"
+            echo "- Job result: \`${JOB_STATUS}\`"
+            echo
+            echo "Production was restarted and the public \`POST /predict\` response was checked against the requested version."
+          } >> "$GITHUB_STEP_SUMMARY"

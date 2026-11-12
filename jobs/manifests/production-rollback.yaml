@@ -1,0 +1,67 @@
+# Set JOB_NAME to a unique production-rollback-<run-suffix> name,
+# ML_JOBS_IMAGE to the immutable SHA already validated for this release and
+# MODEL_VERSION to the existing positive model version requested by the operator.
+# This Job runs only after the protected production Environment approval.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: ml-jobs
+  labels:
+    app.kubernetes.io/name: rollback
+    app.kubernetes.io/part-of: mlflowops
+    app.kubernetes.io/managed-by: github-actions
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rollback
+        app.kubernetes.io/part-of: mlflowops
+    spec:
+      serviceAccountName: training
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: rollback
+          image: ${ML_JOBS_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - jobs/rollback_production.py
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow.mlflow.svc.cluster.local:5000
+            - name: MODEL_NAME
+              value: task-priority-classifier
+            - name: MODEL_VERSION
+              value: "${MODEL_VERSION}"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

@@ -37,10 +37,18 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list"]
+    # `kubectl rollout status` watches the Deployment object.
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["patch"]
+  {{- if eq $ns "production" }}
+  # Read-only Gateway status so the protected release can resolve the public
+  # ALB DNS name before running the production verification Job.
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways"]
+    verbs: ["get"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

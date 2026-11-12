@@ -27,10 +27,20 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: production
+  # `kubectl rollout restart` writes this single runtime annotation. Ignore it
+  # so Argo CD self-heal does not undo a restart after model alias promotion.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: serving-api
+      namespace: production
+      jsonPointers:
+        - /spec/template/metadata/annotations/kubectl.kubernetes.io~1restartedAt
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+      - RespectIgnoreDifferences=true
 {{- end }}

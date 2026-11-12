@@ -1,0 +1,73 @@
+# Set JOB_NAME to a unique production-verify-<run-suffix> name,
+# ML_JOBS_IMAGE to the immutable SHA already validated for this release,
+# SERVING_BASE_URL to the public HTTPS Gateway URL and EXPECTED_MODEL_VERSION to
+# the concrete version behind @production.
+# TLS_VERIFY is false because the showcase may use a self-signed ACM
+# certificate; public smoke tests use `curl -k` for the same reason.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: ml-jobs
+  labels:
+    app.kubernetes.io/name: production-verify
+    app.kubernetes.io/part-of: mlflowops
+    app.kubernetes.io/managed-by: github-actions
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 180
+  ttlSecondsAfterFinished: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: production-verify
+        app.kubernetes.io/part-of: mlflowops
+    spec:
+      serviceAccountName: training
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: production-verify
+          image: ${ML_JOBS_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - jobs/verify_production.py
+          env:
+            - name: SERVING_BASE_URL
+              value: "${SERVING_BASE_URL}"
+            - name: EXPECTED_MODEL_VERSION
+              value: "${EXPECTED_MODEL_VERSION}"
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow.mlflow.svc.cluster.local:5000
+            - name: MODEL_NAME
+              value: task-priority-classifier
+            - name: TLS_VERIFY
+              value: "false"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

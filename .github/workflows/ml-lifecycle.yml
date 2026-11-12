@@ -43,10 +43,11 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    # The ECR URI is intentionally not a job output. GitHub drops job outputs
+    # that contain masked values, so each consuming job resolves it locally.
     outputs:
       proceed: ${{ steps.images.outputs.proceed }}
       image_tag: ${{ steps.resolve.outputs.image_tag }}
-      ml_jobs_image: ${{ steps.images.outputs.ml_jobs_image }}
       production_requested: ${{ steps.resolve.outputs.production_requested }}
       source: ${{ steps.resolve.outputs.source }}
     steps:
@@ -189,8 +190,9 @@ jobs:
             exit 1
           fi
 
+          # Do not emit the full registry URI as a job output: GitHub skips job
+          # outputs containing masked values, which would leave it empty.
           printf 'proceed=true\n' >> "$GITHUB_OUTPUT"
-          printf 'ml_jobs_image=%s\n' "${registry}/mlflowops/ml-jobs:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
           {
             echo "### ML lifecycle"
             echo
@@ -236,11 +238,31 @@ jobs:
           set -euo pipefail
           aws eks update-kubeconfig --name mlflowops-demo --region "$AWS_REGION" >/dev/null
 
+      - name: Resolve the immutable ml-jobs image URI
+        id: image
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          [[ -n "$AWS_REGION" ]] || { echo "Repository variable AWS_REGION is required." >&2; exit 1; }
+
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo "Could not resolve AWS account ID." >&2; exit 1; }
+          registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "::add-mask::$account_id"
+          echo "::add-mask::$registry"
+
+          # Step outputs are usable within this job; masked values are only
+          # dropped when they cross a job output boundary.
+          printf 'ml_jobs_image=%s\n' "${registry}/mlflowops/ml-jobs:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Run training, staging promotion and staging smoke test
         id: pipeline
         shell: bash
         env:
-          ML_JOBS_IMAGE: ${{ needs.validate.outputs.ml_jobs_image }}
+          ML_JOBS_IMAGE: ${{ steps.image.outputs.ml_jobs_image }}
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
           SOURCE: ${{ needs.validate.outputs.source }}
         run: |
@@ -281,9 +303,10 @@ jobs:
               name = match.group(1)
               if name not in required:
                   raise SystemExit(f"unexpected template variable: {name}")
-              if name not in os.environ:
-                  raise SystemExit(f"missing template variable: {name}")
-              return os.environ[name]
+              value = os.environ.get(name, "")
+              if not value:
+                  raise SystemExit(f"missing or empty template variable: {name}")
+              return value
 
           rendered = re.sub(r"\$\{([A-Z_]+)\}", replace, source)
           if re.search(r"\$\{[A-Z_]+\}", rendered):
@@ -459,7 +482,9 @@ jobs:
       needs.train-and-stage.outputs.staging_ready == 'true' &&
       needs.validate.outputs.production_requested == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Allow for the promotion Job, first-release Application creation,
+    # Deployment rollout, Gateway address publication and public verification.
+    timeout-minutes: 45
     environment: production
     permissions:
       contents: write
@@ -491,12 +516,31 @@ jobs:
           set -euo pipefail
           aws eks update-kubeconfig --name mlflowops-demo --region "$AWS_REGION" >/dev/null
 
+      - name: Resolve the immutable ml-jobs image URI
+        id: image
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          [[ -n "$AWS_REGION" ]] || { echo "Repository variable AWS_REGION is required." >&2; exit 1; }
+
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo "Could not resolve AWS account ID." >&2; exit 1; }
+          registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "::add-mask::$account_id"
+          echo "::add-mask::$registry"
+
+          # Step outputs are usable within this job; masked values are only
+          # dropped when they cross a job output boundary.
+          printf 'ml_jobs_image=%s\n' "${registry}/mlflowops/ml-jobs:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Create and wait for the production promotion Job
         id: promote
         shell: bash
         env:
-          ML_JOBS_IMAGE: ${{ needs.validate.outputs.ml_jobs_image }}
-          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          ML_JOBS_IMAGE: ${{ steps.image.outputs.ml_jobs_image }}
         run: |
           set -euo pipefail
 
@@ -523,9 +567,10 @@ jobs:
               name = match.group(1)
               if name not in required:
                   raise SystemExit(f"unexpected template variable: {name}")
-              if name not in os.environ:
-                  raise SystemExit(f"missing template variable: {name}")
-              return os.environ[name]
+              value = os.environ.get(name, "")
+              if not value:
+                  raise SystemExit(f"missing or empty template variable: {name}")
+              return value
 
           rendered = re.sub(r"\$\{([A-Z_]+)\}", replace, source)
           if re.search(r"\$\{[A-Z_]+\}", rendered):
@@ -539,7 +584,22 @@ jobs:
             succeeded="$(jq -r '.status.succeeded // 0' <<< "$job_json")"
             failed="$(jq -r 'any(.status.conditions[]?; .type == "Failed" and .status == "True")' <<< "$job_json")"
             if (( succeeded >= 1 )); then
-              kubectl -n ml-jobs logs "job/${job_name}" --all-containers=true --prefix
+              promotion_logs="$(kubectl -n ml-jobs logs "job/${job_name}" --all-containers=true --prefix)"
+              printf '%s\n' "$promotion_logs"
+
+              new_production_version="$(grep -Eo 'staging_version=[0-9]+' <<< "$promotion_logs" | tail -n1 | cut -d= -f2 || true)"
+              old_production_version="$(grep -Eo 'production_version=([0-9]+|none)' <<< "$promotion_logs" | tail -n1 | cut -d= -f2 || true)"
+              if [[ ! "$new_production_version" =~ ^[0-9]+$ ]]; then
+                echo "Could not read the promoted model version from the production promotion Job logs." >&2
+                exit 1
+              fi
+              if [[ ! "$old_production_version" =~ ^([0-9]+|none)$ ]]; then
+                echo "Could not read the previous production version from the production promotion Job logs." >&2
+                exit 1
+              fi
+
+              printf 'new_production_version=%s\n' "$new_production_version" >> "$GITHUB_OUTPUT"
+              printf 'old_production_version=%s\n' "$old_production_version" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             if [[ "$failed" == "true" ]]; then
@@ -559,12 +619,10 @@ jobs:
       - name: Activate the production Application on the first release
         id: activate
         shell: bash
-        env:
-          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
         run: |
           set -euo pipefail
 
-          if kubectl -n argocd get application serving-production >/dev/null 2>&1; then
+          if kubectl -n production get deployment serving-api >/dev/null 2>&1; then
             echo "first_release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -611,13 +669,20 @@ jobs:
             echo "Push rejected; retrying after rebase." >&2
           done
 
-      - name: Roll out production and verify the deployed image tag
+      - name: Roll out production and verify the public model version
         shell: bash
         env:
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          ML_JOBS_IMAGE: ${{ steps.image.outputs.ml_jobs_image }}
           FIRST_RELEASE: ${{ steps.activate.outputs.first_release }}
+          NEW_PRODUCTION_VERSION: ${{ steps.promote.outputs.new_production_version }}
         run: |
           set -euo pipefail
+
+          if [[ ! "$NEW_PRODUCTION_VERSION" =~ ^[0-9]+$ ]]; then
+            echo "No approved production model version was recorded." >&2
+            exit 1
+          fi
 
           if [[ "$FIRST_RELEASE" == "true" ]]; then
             # Argo CD creates the Application from the new commit; wait for the
@@ -626,7 +691,8 @@ jobs:
             until kubectl -n production get deployment serving-api >/dev/null 2>&1; do
               if (( $(date +%s) >= deadline )); then
                 echo "Argo CD did not create production/serving-api within 10 minutes." >&2
-                kubectl -n argocd get application serving-production -o yaml || true
+                kubectl -n production get deployment serving-api -o yaml || true
+                kubectl -n production get pods -o wide || true
                 exit 1
               fi
               sleep 10
@@ -645,18 +711,106 @@ jobs:
 
           echo "Production serving-api is available from image ${image}."
 
+          # The public route is the only path that satisfies the production
+          # NetworkPolicy; wait for the Gateway to publish its ALB hostname.
+          deadline=$(( $(date +%s) + 600 ))
+          gateway_host=""
+          while (( $(date +%s) < deadline )); do
+            gateway_host="$(kubectl -n production get gateway serving-public -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)"
+            if [[ -n "$gateway_host" ]]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [[ -z "$gateway_host" ]]; then
+            echo "Production Gateway serving-public has no address after 10 minutes." >&2
+            kubectl -n production get gateway serving-public -o yaml || true
+            exit 1
+          fi
+          serving_base_url="https://${gateway_host}"
+          echo "Production Gateway address: ${serving_base_url}"
+
+          template="jobs/manifests/production-verify.yaml"
+          if [[ ! -f "$template" ]]; then
+            echo "::error::${template} is missing from the checked-out commit; cannot verify production." >&2
+            exit 1
+          fi
+
+          run_name="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          verify_job="production-verify-${run_name}"
+          export JOB_NAME="$verify_job"
+          export ML_JOBS_IMAGE
+          export SERVING_BASE_URL="$serving_base_url"
+          export EXPECTED_MODEL_VERSION="$NEW_PRODUCTION_VERSION"
+          python3 - "$template" <<'PY' | kubectl -n ml-jobs create -f -
+          from pathlib import Path
+          import os
+          import re
+          import sys
+
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          required = {
+              "EXPECTED_MODEL_VERSION",
+              "JOB_NAME",
+              "ML_JOBS_IMAGE",
+              "SERVING_BASE_URL",
+          }
+
+          def replace(match):
+              name = match.group(1)
+              if name not in required:
+                  raise SystemExit(f"unexpected template variable: {name}")
+              value = os.environ.get(name, "")
+              if not value:
+                  raise SystemExit(f"missing or empty template variable: {name}")
+              return value
+
+          rendered = re.sub(r"\$\{([A-Z_]+)\}", replace, source)
+          if re.search(r"\$\{[A-Z_]+\}", rendered):
+              raise SystemExit("unresolved Job template variable")
+          sys.stdout.write(rendered)
+          PY
+
+          deadline=$(( $(date +%s) + 240 ))
+          while (( $(date +%s) < deadline )); do
+            job_json="$(kubectl -n ml-jobs get job "$verify_job" -o json)"
+            succeeded="$(jq -r '.status.succeeded // 0' <<< "$job_json")"
+            failed="$(jq -r 'any(.status.conditions[]?; .type == "Failed" and .status == "True")' <<< "$job_json")"
+            if (( succeeded >= 1 )); then
+              kubectl -n ml-jobs logs "job/${verify_job}" --all-containers=true --prefix
+              exit 0
+            fi
+            if [[ "$failed" == "true" ]]; then
+              kubectl -n ml-jobs get pods -l "job-name=${verify_job}" -o wide || true
+              kubectl -n ml-jobs logs "job/${verify_job}" --all-containers=true --prefix || true
+              kubectl -n ml-jobs describe job "$verify_job" || true
+              echo "Production verification Job ${verify_job} failed." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          kubectl -n ml-jobs describe job "$verify_job" || true
+          echo "Timed out waiting for production verification Job ${verify_job}." >&2
+          exit 1
+
       - name: Record the production result
         if: always()
         shell: bash
         env:
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          OLD_PRODUCTION_VERSION: ${{ steps.promote.outputs.old_production_version }}
+          NEW_PRODUCTION_VERSION: ${{ steps.promote.outputs.new_production_version }}
           JOB_STATUS: ${{ job.status }}
         run: |
           {
             echo "### ML lifecycle: production release"
             echo
             echo "- Image tag: \`${IMAGE_TAG}\`"
+            echo "- Previous production version: \`${OLD_PRODUCTION_VERSION:-unknown}\`"
+            echo "- New production version: \`${NEW_PRODUCTION_VERSION:-unknown}\`"
             echo "- Job result: \`${JOB_STATUS}\`"
             echo
-            echo "Verify the production pod loaded the version behind \`@production\` and that a public \`POST /predict\` returns that version. Check the Gateway is Programmed/Accepted with a healthy ALB target (section 5.7) before closing the release."
+            echo "The production Deployment reached its desired replicas and the public \`POST /predict\` response matched the approved model version."
           } >> "$GITHUB_STEP_SUMMARY"

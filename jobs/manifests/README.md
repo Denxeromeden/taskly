@@ -6,8 +6,9 @@ persistent Helm chart source paths, so Argo CD pruning cannot remove a running
 or completed workflow Job.
 
 The templates are `seed.yaml`, `add-data.yaml`, `train.yaml`, `promote.yaml`,
-`promote-production.yaml` and `staging-smoke.yaml`. The workflow substitutes the
-unique Job name and immutable ML jobs image tag, then creates each Job with
+`promote-production.yaml`, `production-rollback.yaml`, `production-verify.yaml`
+and `staging-smoke.yaml`. The workflow substitutes the unique Job name, immutable
+ML jobs image tag and any operation-specific values, then creates each Job with
 `kubectl create -f -`.
 
 The workflow must:
@@ -47,6 +48,20 @@ leaves both aliases unchanged, and a repeat run on the same version is a
 successful no-op. The Job uses the `training` service account and never reads
 Secrets or task text.
 
+`production-rollback.yaml` runs `jobs/rollback_production.py` from the protected
+rollback workflow after the operator supplies an existing `model_version`. It
+validates that the version exists for the model, records the old and new
+production versions, and sets `@production` to the requested version. It also
+uses the `training` service account.
+
+`production-verify.yaml` runs `jobs/verify_production.py` through the public
+Gateway route after a production rollout or rollback. It resolves the concrete
+`@production` alias, submits one synthetic prediction, and requires the response
+`model_version` to match the approved version. The Job does not need ingress
+access to the serving pods; the production NetworkPolicy remains limited to the
+Terraform-supplied public subnet CIDRs. `TLS_VERIFY` is false for the showcase's
+self-signed certificate; public smoke tests use the equivalent `curl -k`.
+
 Do not write a concrete MLflow model version into a Helm values file or
 Deployment manifest; the serving process resolves the configured model alias
-at startup.
+at startup. The rollback input is a workflow dispatch value, not a Git value.

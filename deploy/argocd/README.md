@@ -12,9 +12,9 @@ conditional templates and are not rendered unless their corresponding
 `applications.*.enabled` value is set to `true` in this chart's `values.yaml`.
 
 Enable `applications.servingStaging.enabled` only after the first successful
-training/promotion run has created the `@staging` alias. Keep
-`applications.servingProduction.enabled` set to `false` until the Day 3
-production approval wiring is implemented.
+training/promotion run has created the `@staging` alias. The protected
+`ML lifecycle` production release enables `applications.servingProduction` on
+the first approved release; do not enable it manually.
 
 ## GitOps ownership
 
@@ -59,6 +59,37 @@ configuration or model alias. The staging Application ignores only the
 uses `RespectIgnoreDifferences=true`, preventing automated self-heal from
 reverting the restart marker. All other Deployment fields remain managed by
 Argo CD.
+
+## Production activation, refresh and rollback
+
+On the first approved release, the protected `ML lifecycle` workflow moves
+`@production`, commits only `applications.servingProduction.enabled: true`, and
+waits for Argo CD to create the production Deployment. Argo CD uses the same
+immutable serving image tag already tested in staging and the serving process
+loads the concrete version behind `@production`. Branch protection must allow
+the workflow's `contents: write` token to push that one-file activation commit;
+the workflow retries a rebase/push up to three times and fails closed otherwise.
+
+On later releases, and after an approved rollback, the workflow restarts the
+production Deployment and waits for its desired replicas to become ready:
+
+```bash
+kubectl -n production rollout restart deployment/serving-api
+kubectl -n production rollout status deployment/serving-api --timeout=10m
+```
+
+The production Application ignores the same `kubectl.kubernetes.io/restartedAt`
+annotation and uses `RespectIgnoreDifferences=true`. Automated sync, self-heal
+and prune remain enabled; do not disable GitOps ownership to make restarts work.
+The subsequent public `POST /predict` check must return the exact version behind
+`@production`. Because the showcase certificate may be self-signed, external
+checks and the in-cluster verification Job use the equivalent of `curl -k`.
+
+Emergency rollback is a protected `production-rollback` workflow dispatch with
+an existing `model_version` input. It validates the version, sets
+`@production` through an in-cluster Job, restarts the production Deployment and
+checks the public prediction response. Do not edit the alias or Deployment
+imperatively outside that workflow.
 
 The serving chart selects the model by logical alias (`staging` or
 `production`). Do not commit concrete MLflow model-version numbers into Helm
