@@ -10,6 +10,10 @@ class MlflowMissingAliasError(Exception):
     error_code = "RESOURCE_DOES_NOT_EXIST"
 
 
+class MlflowInvalidParameterError(Exception):
+    error_code = "INVALID_PARAMETER_VALUE"
+
+
 class StubMlflowClient:
     def __init__(self, versions, metrics, production=None, staging=None):
         self.versions = versions
@@ -71,6 +75,56 @@ def test_first_candidate_sets_staging_only_and_logs_initial_decision():
     assert client.alias_lookups == [("task-priority-classifier", "production")]
     assert "registered versions found" in logs[0]
     assert "decision=INITIAL_STAGING_CANDIDATE" in logs[1]
+
+
+def test_first_candidate_handles_mlflow_invalid_parameter_missing_alias():
+    class InvalidParameterMissingAliasClient(StubMlflowClient):
+        def get_model_version_by_alias(self, name, alias):
+            self.alias_lookups.append((name, alias))
+            raise MlflowInvalidParameterError(
+                f"INVALID_PARAMETER_VALUE: Registered model alias {alias} not found."
+            )
+
+    client = InvalidParameterMissingAliasClient(
+        versions=[model_version(1, "run-1")],
+        metrics={"run-1": {"f1_macro": 1.0}},
+    )
+    logs = []
+
+    result = promote_latest_model(client, log=logs.append)
+
+    assert result.decision == "INITIAL_STAGING_CANDIDATE"
+    assert result.candidate_version == "1"
+    assert result.production_version is None
+    assert client.alias_updates == [("task-priority-classifier", "staging", "1")]
+    assert client.aliases["staging"].version == "1"
+    assert "production" not in client.aliases
+    assert "decision=INITIAL_STAGING_CANDIDATE" in logs[-1]
+
+
+def test_unrelated_invalid_parameter_alias_lookup_error_fails_closed():
+    class InvalidParameterClient(StubMlflowClient):
+        def get_model_version_by_alias(self, name, alias):
+            self.alias_lookups.append((name, alias))
+            raise MlflowInvalidParameterError(
+                "INVALID_PARAMETER_VALUE: Invalid model version alias value."
+            )
+
+    production = model_version(4, "production-run")
+    staging = model_version(3, "staging-run")
+    client = InvalidParameterClient(
+        versions=[model_version(5, "candidate-run")],
+        metrics={"candidate-run": {"f1_macro": 0.9}},
+        production=production,
+        staging=staging,
+    )
+
+    with pytest.raises(MlflowInvalidParameterError, match="Invalid model version alias"):
+        promote_latest_model(client)
+
+    assert client.alias_updates == []
+    assert client.aliases["production"] is production
+    assert client.aliases["staging"] is staging
 
 
 def test_equal_candidate_metric_passes_and_updates_staging():

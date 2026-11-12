@@ -52,8 +52,8 @@ def _numeric_metric(run: Any) -> float | None:
     return numeric_value if math.isfinite(numeric_value) else None
 
 
-def _is_missing_resource_error(error: Exception) -> bool:
-    """Recognize MLflow's missing-alias response without hiding other failures."""
+def _is_missing_alias_error(error: Exception, alias: str) -> bool:
+    """Recognize supported MLflow missing-alias responses only."""
     error_code = getattr(error, "error_code", None)
     if error_code is None or isinstance(error_code, int):
         get_error_code = getattr(error, "get_error_code", None)
@@ -62,7 +62,19 @@ def _is_missing_resource_error(error: Exception) -> bool:
 
     if hasattr(error_code, "name"):
         error_code = error_code.name
-    return str(error_code).rsplit(".", 1)[-1] == "RESOURCE_DOES_NOT_EXIST"
+    normalized_code = str(error_code).rsplit(".", 1)[-1]
+
+    # Older MLflow responses use RESOURCE_DOES_NOT_EXIST for a missing alias.
+    if normalized_code == "RESOURCE_DOES_NOT_EXIST":
+        return True
+
+    # Some MLflow versions report a missing alias as INVALID_PARAMETER_VALUE.
+    # Only this specific message is safe to interpret as the first-run case.
+    if normalized_code == "INVALID_PARAMETER_VALUE":
+        expected_message = f"registered model alias {alias.lower()} not found"
+        return expected_message in str(error).lower()
+
+    return False
 
 
 def _metric_for_version(client: Any, model_version: Any) -> float | None:
@@ -114,7 +126,7 @@ def promote_latest_model(
     try:
         production = client.get_model_version_by_alias(model_name, PRODUCTION_ALIAS)
     except Exception as exc:
-        if not _is_missing_resource_error(exc):
+        if not _is_missing_alias_error(exc, PRODUCTION_ALIAS):
             raise
         production = None
 
