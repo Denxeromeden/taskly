@@ -355,36 +355,25 @@ jobs:
 
           wait_for_staging_rollout() {
             local timeout_seconds=300
-            local initial
-            initial="$(kubectl -n staging get deployment serving-api -o json)"
-            local generation desired deadline
-            generation="$(jq -r '.metadata.generation' <<< "$initial")"
-            desired="$(jq -r '.spec.replicas // 1' <<< "$initial")"
-            deadline=$(( $(date +%s) + timeout_seconds ))
+            local selector='app.kubernetes.io/instance=serving-api,app.kubernetes.io/name=serving-api'
 
-            while (( $(date +%s) < deadline )); do
-              local current observed updated available failed
-              current="$(kubectl -n staging get deployment serving-api -o json)"
-              observed="$(jq -r '.status.observedGeneration // 0' <<< "$current")"
-              updated="$(jq -r '.status.updatedReplicas // 0' <<< "$current")"
-              available="$(jq -r '.status.availableReplicas // 0' <<< "$current")"
-              failed="$(jq -r 'any(.status.conditions[]?; .type == "Progressing" and .status == "False" and .reason == "ProgressDeadlineExceeded")' <<< "$current")"
+            if ! kubectl -n staging rollout status deployment/serving-api \
+                --timeout="${timeout_seconds}s"; then
+              echo "Staging serving-api rollout did not complete." >&2
 
-              if (( observed >= generation && updated >= desired && available >= desired )); then
-                echo "Staging serving-api rollout completed (${available}/${desired} replicas available)."
-                return 0
-              fi
-              if [[ "$failed" == "true" ]]; then
-                echo "Staging serving-api reported ProgressDeadlineExceeded." >&2
-                return 1
-              fi
-              sleep 5
-            done
+              kubectl -n staging get deployment serving-api -o wide || true
+              kubectl -n staging get rs -l "$selector" -o wide || true
+              kubectl -n staging get pods -l "$selector" -o wide || true
 
-            echo "Timed out waiting for the staging serving-api Deployment to become available." >&2
-            kubectl -n staging get deployment serving-api -o wide || true
-            kubectl -n staging get pods -l app.kubernetes.io/name=serving -o wide || true
-            return 1
+              while IFS= read -r pod; do
+                [[ -n "$pod" ]] || continue
+                echo "--- Logs: $pod ---"
+                kubectl -n staging logs "$pod" -c serving-api \
+                  --tail=100 --timestamps || true
+              done < <(kubectl -n staging get pods -l "$selector" -o name || true)
+
+              return 1
+            fi
           }
 
           summary_header() {
